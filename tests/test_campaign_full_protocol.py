@@ -43,8 +43,81 @@ def test_controller_overlaps_only_explicitly_prefetched_qualification_checks():
     manifest['prefetched_qualification_ids'] = [checks[0]['id'], manifest['designs'][0]['id']]
     candidates = dispatch_candidates(manifest)
     assert {r['id'] for r in candidates} == {r['id'] for r in manifest['pilot_designs']} | {checks[0]['id']}
+    manifest['provisional_collection'] = {'enabled': True}
+    assert len(dispatch_candidates(manifest)) == 404
+    manifest['phase'] = 'needs_investigation'
+    assert dispatch_candidates(manifest) == []
+    manifest['phase'] = 'pilot'
     manifest['execution_scope'] = 'pilot'
     assert dispatch_candidates(manifest) == manifest['pilot_designs']
+
+
+def test_controller_relay_stops_when_blocked_disabled_or_already_queued():
+    import sys
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
+    from campaign_controller import relay
+
+    metadata = {'enabled': True, 'phase': 'pilot'}
+    runs = [{'id': 11, 'status': 'in_progress'}]
+    dispatched = []
+    store = SimpleNamespace(catalog=SimpleNamespace(get=lambda _: (metadata, None)))
+
+    def request(method, path, body=None):
+        if method == 'GET':
+            return {'workflow_runs': runs}
+        dispatched.append(body)
+
+    app = SimpleNamespace(repository=lambda _: SimpleNamespace(repo=request))
+    assert relay(store, app, 'core-damage-v2-20261107', '11')['controller_redispatched']
+    assert dispatched == [{'ref': 'main'}]
+    runs.append({'id': 12, 'status': 'queued'})
+    assert not relay(store, app, 'core-damage-v2-20261107', '11')['controller_redispatched']
+    runs.pop()
+    metadata['enabled'] = False
+    assert not relay(store, app, 'core-damage-v2-20261107', '11')['controller_redispatched']
+    metadata['enabled'] = True
+    for phase in ('needs_investigation', 'completed', 'verification_failed', 'insufficient_data'):
+        metadata['phase'] = phase
+        assert not relay(store, app, 'core-damage-v2-20261107', '11')['controller_redispatched']
+    assert len(dispatched) == 1
+
+
+def test_controller_refills_a_released_slot_and_counts_its_own_actions_job(monkeypatch):
+    import sys
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
+    import campaign_controller as controller
+
+    manifest = campaign_manifest()
+    owner = manifest['designs'][0]['owner']
+    manifest.update(enabled=True, phase='production', capacity_stage=160,
+                    workflow_capacity=160, license_capacity=128)
+    jobs = [{'status': 'in_progress', 'campaign_solver': True} for _ in range(19)]
+    jobs.append({'status': 'in_progress', 'campaign_solver': False})
+    dispatched = []
+
+    def reserve(_manifest, row):
+        dispatched.append(row['id'])
+        row['status'] = 'dispatching'
+
+    monkeypatch.setattr(controller, 'page_jobs', lambda _github, **_kwargs: list(jobs))
+    monkeypatch.setattr(controller, 'admission', lambda _manifest, _row: True)
+    monkeypatch.setattr(controller, 'Dispatcher', lambda *_args: SimpleNamespace(reserve=reserve))
+    app = SimpleNamespace(repository=lambda _: object())
+    controller.fill_owner_slots(None, app, manifest, manifest['designs'], 160, owner)
+    assert not dispatched
+    jobs.pop(0)  # A real worker finishes while the controller still occupies one Actions slot.
+    controller.fill_owner_slots(None, app, manifest, manifest['designs'], 160, owner)
+    assert len(dispatched) == 1
+    controller.fill_owner_slots(None, app, manifest, manifest['designs'], 160, owner)
+    assert len(dispatched) == 1  # The durable reservation consumes the released slot.
+    report = controller.status_report(manifest)
+    assert report['workflow_capacity'] == 160 and report['solver_license_capacity'] == 128
 
 
 def test_failed_eight_ms_time_gate_does_not_allocate_sixteen_ms():
@@ -58,6 +131,36 @@ def test_failed_eight_ms_time_gate_does_not_allocate_sixteen_ms():
     assert not any(row['model']['duration'] > .012 for row in result['designs'])
 
 
+def test_user_selected_actions_mesh_skips_refinement_without_claiming_convergence():
+    manifest = campaign_manifest()
+    manifest.update(phase='time', execution_scope='full', selected_velocity_m_s=8., trial_duration_s=.008,
+                    mesh_policy={'mode': 'reuse_actions_reference', 'source_job_id': 'previous-actions'})
+    for row in manifest['pilot_designs']:
+        accepted(row)
+    manifest['designs'].extend(accepted(row) for row in qualification_designs(8., .012))
+    result = advance(manifest)
+    assert result['phase'] == 'sensitivity' and result['selected_mesh_factor'] == 1.
+    assert result['gates']['mesh']['convergence_verified'] is False
+    assert not any(row.get('purpose') in ('mesh', 'mesh_time') for row in result['designs'])
+    assert len({row['owner'] for row in result['designs'] if row.get('purpose') == 'sensitivity'}) == 8
+
+
+def test_identical_qualified_control_reuses_verified_bytes_and_preserves_identity():
+    from honeycomb_studio.campaign_protocol import extend_unique
+
+    manifest = campaign_manifest()
+    source = accepted(manifest['pilot_designs'][0])
+    source.update(archive={'kind': 'fixture'}, source_sha='a' * 40, workflow_run_id=11)
+    target = qualification_designs(8., .008, label='sensitivity')[0]
+    extend_unique(manifest, [target])
+    row = manifest['designs'][-1]
+    assert row['id'] != source['id'] and row['physics_hash'] == source['physics_hash']
+    assert row['status'] == 'completed' and row['reused_from']['design_id'] == source['id']
+    assert row['source_sha'] == source['source_sha'] and row['archive'] == source['archive']
+    source['summary']['SEA_core_J_kg'] = -1
+    assert row['summary']['SEA_core_J_kg'] == 100.
+
+
 @pytest.mark.parametrize(('velocity', 'duration'), [(5., .008), (8., .012), (8., .004)])
 def test_freeze_rejects_changes_to_the_fixed_load_and_main_duration(velocity, duration):
     manifest = campaign_manifest()
@@ -65,6 +168,19 @@ def test_freeze_rejects_changes_to_the_fixed_load_and_main_duration(velocity, du
     gates = {name: {'passed': True} for name in ('material', 'mesh', 'time', 'damage_sensitivity', 'archive_restore')}
     with pytest.raises(ValueError, match='fixed|8 m/s|8 ms'):
         freeze(manifest, velocity, duration, 1., gates)
+
+
+def test_freeze_cannot_rewrite_dispatched_provisional_inputs():
+    manifest = campaign_manifest()
+    manifest['source_sha'] = 'a' * 40
+    row = manifest['designs'][0]
+    row['status'] = 'dispatching'
+    original = row['physics_hash']
+    gates = {name: {'passed': True} for name in ('material', 'mesh', 'time', 'damage_sensitivity', 'archive_restore')}
+    with pytest.raises(ValueError, match='already dispatched'):
+        freeze(manifest, 8., .008, .75, gates)
+    assert row['physics_hash'] == original
+    assert freeze(manifest, 8., .008, 1., gates)['designs'][0]['physics_hash'] == original
 
 
 def test_refined_mesh_gets_its_own_time_comparison_before_sensitivity():

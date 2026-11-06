@@ -2,7 +2,36 @@
 
 Ngày lập: 06/11/2026, múi giờ Asia/Bangkok.
 
-Cập nhật theo lệnh thực thi: **60 OFAT**, gồm 15 mức/biến không trùng tham chiếu; **259 LHS phát triển**. Đã được phép triển khai toàn bộ khi lần lượt đạt các cổng kiểm chứng. Qualification phục hồi và hạ tầng tám tài khoản đã đạt trên source `ca9ee5448fb312c7d7ed9fac5b4eefde757697b8`; controller đã mở ở pha pilot. Bộ 400 mẫu còn chờ các cổng hội tụ và độ nhạy.
+**Điều chỉnh theo yêu cầu mới nhất của người dùng:** dùng lại lưới của job Actions
+`c45a1d75d6174e31890d9e3861419a9c`: lõi 0,7/1,3 mm, mặt 0,75/1,25 mm,
+chiều sâu 1 mm, viên bi 1 mm, bán kính vùng mịn 22 mm, nửa vùng mặt 12 mm,
+S4R/S3R và 5 điểm tích phân bề dày. Bỏ các nhánh tinh lưới 0,75/0,5;
+lựa chọn này không được ghi thành bằng chứng hội tụ lưới mới. Những bài đang
+giải với vùng mịn 25/25 mm giữ nguyên đầu vào và nguồn gốc, chỉ dùng làm chẩn
+đoán bổ sung; bộ 400 dùng đồng nhất lưới được người dùng chọn. Các kiểm tra
+vật liệu, thời gian, năng lượng, trạng thái hư hỏng và tính đủ của dữ liệu vẫn áp dụng.
+
+Theo lệnh tiếp tục thu đủ 400 mẫu, thu thập FE trên đầu vào đã chốt được phép
+chạy song song với các kiểm chứng còn lại. Quyền thu thập này chỉ mở khi vật
+liệu, restart và archive restore đã đạt trên đúng source/runtime và đầu vào
+khớp hoàn toàn mẫu chuẩn với bốn biến khảo sát. Chưa đạt kiểm chứng toàn chiến
+dịch thì chưa cho mẫu vào huấn luyện. Nếu kiểm chứng bị chặn thì dừng phát
+mẫu mới; giữ nguyên dữ liệu đã tính để điều tra. Không đổi đầu vào của cấu hình
+đã dispatch khi khóa giao thức. Báo riêng số trong 400 đã dispatch, hoàn tất số,
+và trạng thái kiểm chứng toàn bộ; pilot và coupon không cộng vào số 400.
+
+Cập nhật thực thi ngày 07/11/2026: **60 OFAT**, gồm 15 mức/biến không trùng
+tham chiếu; **259 LHS phát triển**, 1 tham chiếu và 80 test khóa = **400**.
+Qualification phục hồi và hạ tầng cả tám tài khoản đã đạt trên worker source
+`f7d7e93cb0d97f8c99246a0a904d5d173a19a70d`. Đã bật thu thập song song
+và sau đó nâng lên **160 slot Actions (20/tài khoản)** theo yêu cầu khẩn.
+160 slot bao gồm job điều phối; khi controller chạy, tối đa 159 worker FE.
+Pool FlexNet được ghi riêng là 128 lượt solver 4 CPU theo dữ liệu hiện có;
+các analysis có thể chờ token trong hàng đợi giấy phép mặc định của Abaqus.
+Controller đối soát và lấp slot tám tài khoản song song, tự gửi lượt kế tiếp
+sau 30 giây chờ, có khóa concurrency và không gửi trùng khi đã có lượt chờ;
+ngừng nối tiếp khi bị chặn, tắt hoặc hoàn tất. Số mẫu hoàn tất lấy từ receipt
+đã kiểm tra, không suy từ việc gửi workflow.
 
 ## 1. Phạm vi và đầu ra
 

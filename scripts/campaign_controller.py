@@ -6,9 +6,11 @@ import os
 import time
 import uuid
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
 from honeycomb_studio.campaign import OWNERS, campaign_manifest, progress
 from honeycomb_studio.campaign_acceptance import import_evidence
+from honeycomb_studio.campaign_export import globally_qualified
 from honeycomb_studio.campaign_protocol import advance, runnable
 from honeycomb_studio.campaign_queue import (
     CampaignStore,
@@ -17,6 +19,7 @@ from honeycomb_studio.campaign_queue import (
     apply_outcome,
     available_slots,
     campaign_key,
+    dispatch_capacity,
     page_jobs,
     ramp_capacity,
     ticket_key,
@@ -55,7 +58,15 @@ def persist(store, manifest):
 
 
 def reconcile(store, manifest, app):
+    with ThreadPoolExecutor(max_workers=len(OWNERS)) as pool:
+        list(pool.map(lambda owner: reconcile_owner(store, manifest, app, owner), OWNERS))
+    return manifest
+
+
+def reconcile_owner(store, manifest, app, owner):
     for row in manifest['designs'] + manifest['pilot_designs']:
+        if row['owner'] != owner:
+            continue
         if row['status'] == 'publication_pending':
             reconcile_publication(manifest, row, app)
             continue
@@ -76,6 +87,8 @@ def reconcile(store, manifest, app):
         elif work.get('workflow_run_id'):
             row['workflow_run_id'] = work['workflow_run_id']
             row['phase'] = work.get('phase', 'preparing')
+            if work.get('status') == 'claimed' and not work.get('error'):
+                row['error'] = None
             run = github.repo('GET', '/actions/runs/' + str(work['workflow_run_id']))
             if run['status'] == 'completed':
                 row.update(status='needs_investigation', error='Workflow ended without a verified solver/publication receipt',
@@ -141,6 +154,12 @@ def reconcile_publication(manifest, row, app):
 def status_report(manifest):
     report = progress(manifest)
     report.update(phase=manifest['phase'], enabled=manifest['enabled'], errors=[], owners={})
+    initial = [r for r in manifest['designs'] if r['role'] in ('development', 'test')]
+    report.update(initial_400_dispatched=sum(r['status'] != 'pending' for r in initial),
+                  initial_400_completed=sum(r['status'] == 'completed' and r.get('archive_verified', False)
+                                            and r.get('quality', {}).get('passed', False) for r in initial),
+                  global_qualification_passed=globally_qualified(manifest),
+                  provisional_collection=manifest.get('provisional_collection', {}).get('enabled', False))
     samples = [r for r in manifest['designs'] if r['role'] in ('development', 'adaptive', 'test', 'confirmation')]
     done = [r for r in samples if r['status'] == 'completed' and r.get('archive_verified')]
     for owner in OWNERS:
@@ -149,7 +168,8 @@ def status_report(manifest):
     report.update(training_configurations=len(samples), archived_configurations=len(done),
                   percent=100 * len(done) / max(1, len(samples)))
     measured = [r.get('execution_wall_seconds') for r in done if r.get('execution_wall_seconds')]
-    capacity = min(manifest.get('license_capacity', 0), manifest.get('capacity_stage', 8))
+    capacity = dispatch_capacity(manifest)
+    report.update(workflow_capacity=capacity, solver_license_capacity=manifest.get('license_capacity', 0))
     report['eta_seconds'] = (math.ceil((len(samples) - len(done)) / capacity) * sum(measured) / len(measured)
                              if measured and capacity else None)
     report['errors'] = [{'id': r['id'], 'owner': r['owner'], 'status': r['status'], 'error': r.get('error')}
@@ -185,6 +205,26 @@ def reconcile_analysis(manifest, app):
         dispatch_analysis(app, manifest)
 
 
+def fill_owner_slots(store, app, manifest, rows, capacity, owner):
+    github = app.repository(owner + '/honeycomb-abaqus-studio')
+    index = OWNERS.index(owner)
+    owner_budget = capacity // 8 + (index < capacity % 8)
+    if not owner_budget:
+        return owner, {}
+    reserved = sum(r['owner'] == owner and r['status'] == 'dispatching' and not r.get('workflow_run_id')
+                   for r in manifest['designs'] + manifest['pilot_designs'])
+    warnings = []
+    slots = available_slots(owner_budget, page_jobs(github, warnings=warnings), reserved)
+    pending = [r for r in rows if r['owner'] == owner
+               and r['status'] in ('pending', 'checkpoint', 'solver_retry', 'preparation_retry')
+               and admission(manifest, r)]
+    dispatcher = Dispatcher(store, app)
+    for row in pending[:slots]:
+        dispatcher.reserve(manifest, row)
+    return owner, {'scope': 'selected repository and visible public repositories; GitHub enforces shared owner quota',
+                   'warnings': warnings}
+
+
 def tick(store, app, identity):
     manifest = reconcile(store, store.load(identity), app)
     manifest = ingest_evidence(store, manifest, app)
@@ -200,26 +240,13 @@ def tick(store, app, identity):
         persist(store, manifest)
         dispatch_analysis(app, manifest)
     persist(store, manifest)
-    dispatcher = Dispatcher(store, app)
-    capacity = min(manifest.get('capacity_stage', 8), manifest.get('license_capacity', 0), 160)
+    capacity = dispatch_capacity(manifest)
     if manifest.get('enabled') and capacity:
         rows = dispatch_candidates(manifest)
-        for i, owner in enumerate(OWNERS):
-            github = app.repository(owner + '/honeycomb-abaqus-studio')
-            owner_budget = capacity // 8 + (i < capacity % 8)
-            if not owner_budget:
-                continue
-            reserved = sum(r['owner'] == owner and r['status'] == 'dispatching' and not r.get('workflow_run_id')
-                           for r in manifest['designs'] + manifest['pilot_designs'])
-            warnings = []
-            slots = available_slots(owner_budget, page_jobs(github, warnings=warnings), reserved)
-            manifest.setdefault('quota_observation', {})[owner] = {
-                'scope': 'selected repository and visible public repositories; GitHub enforces shared owner quota',
-                'warnings': warnings}
-            pending = [r for r in rows if r['owner'] == owner and r['status'] in ('pending', 'checkpoint', 'solver_retry', 'preparation_retry')
-                       and admission(manifest, r)]
-            for row in pending[:slots]:
-                dispatcher.reserve(manifest, row)
+        with ThreadPoolExecutor(max_workers=len(OWNERS)) as pool:
+            observations = pool.map(lambda owner: fill_owner_slots(store, app, manifest, rows, capacity, owner), OWNERS)
+            for owner, observation in observations:
+                manifest.setdefault('quota_observation', {})[owner] = observation
     if manifest.get('quota_observation'):
         store.catalog.update(campaign_key(identity) + '/meta',
                              lambda old: {**old, 'quota_observation': manifest['quota_observation']})
@@ -232,21 +259,45 @@ def tick(store, app, identity):
 def dispatch_candidates(manifest):
     """Overlap explicitly planned time/mesh checks with pilots under the same quota."""
     rows = runnable(manifest)
-    if manifest.get('execution_scope') != 'full' or manifest.get('phase') not in ('pilot', 'time', 'mesh'):
+    if manifest.get('execution_scope') != 'full':
         return rows
     requested = set(manifest.get('prefetched_qualification_ids', []))
     existing = {r['id'] for r in rows}
-    return rows + [r for r in manifest['designs'] if r['id'] in requested and r['id'] not in existing
-                   and r['role'] == 'qualification' and r.get('purpose') in ('time', 'mesh')]
+    if manifest.get('phase') in ('pilot', 'time', 'mesh'):
+        rows += [r for r in manifest['designs'] if r['id'] in requested and r['id'] not in existing
+                 and r['role'] == 'qualification' and r.get('purpose') in ('time', 'mesh')]
+    if (manifest.get('provisional_collection', {}).get('enabled') is True
+            and manifest.get('phase') in ('pilot', 'time', 'sensitivity', 'development_time_audit')):
+        existing = {r['id'] for r in rows}
+        rows += [r for r in manifest['designs'] if r['id'] not in existing and r['role'] in ('development', 'test')]
+    return rows
+
+
+def relay(store, app, identity, workflow_run_id):
+    """Keep the active campaign moving when GitHub's scheduled event is delayed."""
+    metadata, _ = store.catalog.get(campaign_key(identity) + '/meta')
+    active_phases = {'material', 'pilot', 'time', 'mesh', 'mesh_time', 'sensitivity',
+                     'development_time_audit', 'production', 'adaptive', 'confirmation', 'analysis_pending'}
+    if not metadata or not metadata.get('enabled') or metadata.get('phase') not in active_phases:
+        return {'controller_redispatched': False}
+    github = app.repository(CANONICAL)
+    runs = github.repo('GET', '/actions/workflows/core-damage-controller.yml/runs?per_page=100')['workflow_runs']
+    if any(r['status'] != 'completed' and str(r['id']) != str(workflow_run_id) for r in runs):
+        return {'controller_redispatched': False, 'reason': 'Another controller is already queued'}
+    github.repo('POST', '/actions/workflows/core-damage-controller.yml/dispatches', {'ref': 'main'})
+    return {'controller_redispatched': True}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=('initialize', 'tick', 'status'))
+    parser.add_argument('mode', choices=('initialize', 'tick', 'status', 'relay'))
     parser.add_argument('--campaign-id', default='core-damage-v2-20261106')
     args = parser.parse_args()
     app = CampaignApp()
     store = CampaignStore(app.repository(CANONICAL))
+    if args.mode == 'relay':
+        print(json.dumps(relay(store, app, args.campaign_id, os.environ['GITHUB_RUN_ID'])))
+        return
     if args.mode == 'initialize':
         manifest = campaign_manifest(args.campaign_id)
         manifest['source_sha'] = os.environ['CAMPAIGN_SOURCE_SHA']

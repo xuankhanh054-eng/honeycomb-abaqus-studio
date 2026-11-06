@@ -47,7 +47,32 @@ def summaries(rows):
 
 def extend_unique(manifest, rows):
     known = {r['id'] for r in manifest['designs'] + manifest['pilot_designs']}
-    manifest['designs'].extend(r for r in rows if r['id'] not in known)
+    counts = {owner: sum(r['owner'] == owner and r['status'] not in ('completed', 'retired')
+                        and r['role'] in ('pilot', 'qualification')
+                        for r in manifest['designs'] + manifest['pilot_designs']) for owner in OWNERS}
+    for row in rows:
+        if row['id'] in known:
+            continue
+        matches = [r for r in manifest['designs'] + manifest['pilot_designs']
+                   if r['physics_hash'] == row['physics_hash'] and r['status'] == 'completed'
+                   and r.get('archive_verified') and r.get('archive')
+                   and numerical_gate(r.get('summary', {}))['passed']]
+        if matches:
+            source = matches[0]
+            for key in ('owner', 'repository', 'status', 'summary', 'quality', 'archive', 'archive_verified',
+                        'workflow_run_id', 'source_sha', 'execution_history'):
+                if key in source:
+                    row[key] = deepcopy(source[key])
+            row['reused_from'] = {'design_id': source['id'], 'physics_hash': source['physics_hash'],
+                                  'workflow_run_id': source.get('workflow_run_id')}
+            manifest['designs'].append(row)
+            known.add(row['id'])
+            continue
+        owner = min(OWNERS, key=lambda candidate: counts[candidate])
+        row.update(owner=owner, repository=owner + '/honeycomb-abaqus-studio')
+        manifest['designs'].append(row)
+        known.add(row['id'])
+        counts[owner] += 1
 
 
 def audit_selection(manifest, count=40):
@@ -115,6 +140,15 @@ def advance(original):
             return manifest
         if all(response_converged(a, b) for a, b in zip(summaries(short), summaries(long), strict=True)):
             gates['time'] = {'passed': True, 'short_ids': [r['id'] for r in short], 'long_ids': [r['id'] for r in long]}
+            if manifest.get('mesh_policy', {}).get('mode') == 'reuse_actions_reference':
+                gates['mesh'] = {'passed': True, 'method': 'user_selected_actions_reference',
+                                 'convergence_verified': False, 'factor': 1.,
+                                 'reference': deepcopy(manifest['mesh_policy'])}
+                manifest.update(selected_duration_s=duration, selected_mesh_factor=1., phase='sensitivity')
+                for displacement in (.05, .1, .2):
+                    extend_unique(manifest, qualification_designs(velocity, duration,
+                        mesh_factor=1., failure_displacement=displacement, label='sensitivity'))
+                return manifest
             manifest.update(selected_duration_s=duration, phase='mesh')
             for factor in (1., .75, .5):
                 extend_unique(manifest, qualification_designs(velocity, duration, mesh_factor=factor, label='mesh'))

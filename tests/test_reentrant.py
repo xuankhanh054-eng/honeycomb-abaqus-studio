@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from honeycomb_studio.adapters.reentrant import network
+from honeycomb_studio.adapters.reentrant import bond_faces, network
 from honeycomb_studio.api import make_app
 from honeycomb_studio.engine import Engine
 from honeycomb_studio.estimates import predict
@@ -22,6 +22,24 @@ def test_reference_section_has_same_mass_and_walls_as_solved_image1():
         assert -50 <= u[0] <= 50 and -50 <= v[0] <= 50
         assert -10 <= u[1] <= 10 and -10 <= v[1] <= 10
         assert not (u[1] == v[1] and abs(u[1]) == 10)
+
+
+def test_clipped_short_struts_do_not_prevent_bonding_end_faces_within_existing_tolerance():
+    walls = network(100, 20, 5.69160327203117, 3.325791235375995, .8646182243641487)
+    vertices, faces = [], []
+    for u, v, _double in walls:
+        start = len(vertices)
+        vertices.extend(((u[0], u[1], 0.), (v[0], v[1], 0.),
+                         (v[0], v[1], 100.), (u[0], u[1], 100.)))
+        faces.append(tuple(range(start, start + 4)))
+    assert max(p[1] for p in vertices) == pytest.approx(9.9773737)
+    for target in (-10., 10.):
+        coordinate, indices = bond_faces(vertices, faces, target, .05)
+        assert abs(target - coordinate) == pytest.approx(.0226263)
+        assert indices
+        assert all(abs(vertices[j][1] - coordinate) < 1.e-5 for i in indices for j in faces[i])
+    with pytest.raises(ValueError, match='tolerance'):
+        bond_faces(vertices, faces, 10., .01)
 
 
 def test_resolve_uses_reentrant_density_not_hexagonal_density():

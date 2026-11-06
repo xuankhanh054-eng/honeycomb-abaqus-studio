@@ -3,6 +3,26 @@
 import math
 
 
+def bond_faces(vertices, faces, target, tolerance):
+    """Select existing end-cap faces within the prescribed perfect-bond tolerance.
+
+    Clipping can remove very short inclined tails while retaining a horizontal
+    end cap. Bind the complete cap using Tie adjust, without changing the wall
+    network, shell mass, or the user's geometric and meshing inputs.
+    """
+    if not vertices or tolerance <= 0:
+        raise ValueError('Missing core vertices or invalid bond tolerance')
+    coordinate = max(p[1] for p in vertices) if target > 0 else min(p[1] for p in vertices)
+    gap = abs(target - coordinate)
+    if gap > tolerance + 1.e-7:
+        raise ValueError('Core end lies outside the prescribed Tie tolerance')
+    indices = [i for i, face in enumerate(faces)
+               if face and all(abs(vertices[j][1] - coordinate) <= 1.e-5 for j in face)]
+    if not indices:
+        raise ValueError('No complete end-cap faces within the prescribed Tie tolerance')
+    return coordinate, indices
+
+
 def network(width, height, cell_width, cell_height, indent, phase_x=0., phase_z=0., min_length=.05):
     a, b = cell_width / 2., cell_height / 2.
     vertices = ((-a,-b),(a,-b),(a-indent,0.),(a,b),(-a,b),(-a+indent,0.))

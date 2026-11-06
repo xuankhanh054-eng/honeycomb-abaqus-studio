@@ -6,6 +6,12 @@ from pathlib import Path
 from .models import ModelSpec
 
 
+def globally_qualified(manifest):
+    return manifest.get('frozen') is True and all(
+        manifest.get('gates', {}).get(k, {}).get('passed') is True for k in
+        ('material', 'restart', 'time', 'mesh', 'damage_sensitivity', 'archive_restore', 'development_time_audit'))
+
+
 def flatten(value, prefix=''):
     result = {}
     for key, item in value.items():
@@ -23,10 +29,11 @@ def export_campaign(manifest, directory: Path):
     directory.mkdir(parents=True, exist_ok=True)
     rows = []
     index = []
+    global_qualification = globally_qualified(manifest)
     for row in manifest['designs'] + manifest['pilot_designs']:
         summary = row.get('summary', {})
         numerical = row.get('quality', {}).get('passed') is True
-        training = (row['role'] in ('development', 'adaptive') and row.get('archive_verified') is True
+        training = (global_qualification and row['role'] in ('development', 'adaptive') and row.get('archive_verified') is True
                     and numerical and summary.get('rear_skin_deleted') is False
                     and summary.get('event_finished') is True)
         item = {'campaign_id': manifest['id'], 'design_id': row['id'], 'sample_group': row['role'],
@@ -35,6 +42,9 @@ def export_campaign(manifest, directory: Path):
                 'numerical_inputs_hash': row['numerical_inputs_hash'], 'source_sha': row.get('source_sha', manifest['source_sha']),
                 'protocol_hash': manifest.get('protocol_hash'), 'runtime_hash': manifest.get('runtime_hash'),
                 'status': row['status'], 'numerical_passed': numerical, 'ml_development_eligible': training,
+                'global_qualification_passed': global_qualification,
+                'qualification_pending_at_dispatch': row.get('qualification_pending_at_dispatch', False),
+                'protocol_hash_at_dispatch': row.get('protocol_hash_at_dispatch'),
                 'archive_verified': row.get('archive_verified', False), 'attempt': row.get('attempt', 0),
                 'segment': row.get('segment', 0), 'solver_error': row.get('error')}
         item.update(flatten(ModelSpec.model_validate(row['model']).resolved(), 'input.'))

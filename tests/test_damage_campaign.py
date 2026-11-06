@@ -48,6 +48,7 @@ def test_reference_contract_units_and_identity():
     assert spec["field_intervals"] == 800
     assert spec["history_intervals"] == 4000
     assert spec["core_height"] == 20
+    assert spec['fine_radius'] == 22 and spec['skin_patch_half'] == 12
     assert spec["core_material"]["johnson_cook"]["d3"] == .47
     assert digest(spec) != digest(reference_model(velocity_m_s=10).resolved())
     BatchSpec.model_validate(one_run_spec(pilots()[0]))

@@ -8,6 +8,7 @@ from honeycomb_studio.campaign_queue import (
     apply_outcome,
     available_slots,
     claim,
+    dispatch_capacity,
     page_jobs,
     ramp_capacity,
 )
@@ -33,11 +34,51 @@ def test_production_cannot_bypass_material_and_forty_design_time_audit():
                     infrastructure={row['owner']: {'passed': True}}, gates={k: {'passed': True} for k in
                     ('material', 'time', 'mesh', 'damage_sensitivity', 'archive_restore')})
     assert not admission(manifest, row)
+
     manifest['audit_ids'] = [row['id']]
     assert admission(manifest, row)
     assert not admission({**manifest, 'execution_scope': 'pilot'}, row)
     manifest['gates']['material']['passed'] = False
     assert not admission(manifest, row)
+
+
+def test_provisional_collection_requires_exact_native_proof_and_stops_when_blocked(tmp_path):
+    import csv
+
+    from honeycomb_studio.campaign_export import export_campaign
+
+    manifest = campaign_manifest()
+    row = manifest['designs'][0]
+    mesh_keys = ('core_centre_seed', 'core_outer_seed', 'skin_centre_seed', 'skin_outer_seed',
+                 'reentrant_depth_seed', 'core_z_divisions', 'ball_seed', 'fine_radius',
+                 'skin_patch_half', 'shell_element', 'shell_points')
+    native = {k: {'passed': True, 'source_sha': 'a' * 40, 'runtime_hash': 'b' * 64}
+              for k in ('material', 'restart', 'archive_restore')}
+    manifest.update(enabled=True, execution_scope='full', phase='pilot', source_sha='a' * 40,
+                    runtime_hash='b' * 64, infrastructure={row['owner']: {'passed': True}}, gates=native,
+                    mesh_policy={'mode': 'reuse_actions_reference', 'parameters': {k: row['model'][k] for k in mesh_keys}})
+    assert not admission(manifest, row)
+    manifest['provisional_collection'] = {'enabled': True}
+    assert admission(manifest, row)
+    assert not admission(manifest, {**row, 'model': {**row['model'], 'velocity_m_s': 9}})
+    manifest['gates']['restart']['source_sha'] = 'c' * 40
+    assert not admission(manifest, row)
+    manifest['gates']['restart']['source_sha'] = manifest['source_sha']
+    manifest['phase'] = 'needs_investigation'
+    assert not admission(manifest, row)
+    manifest['phase'] = 'pilot'
+    row.update(status='completed', archive_verified=True, quality={'passed': True},
+               summary={'rear_skin_deleted': False, 'event_finished': True})
+    manifest.update(designs=[row], pilot_designs=[])
+    export_campaign(manifest, tmp_path)
+    with (tmp_path / 'samples.csv').open(encoding='utf-8-sig', newline='') as stream:
+        exported = next(csv.DictReader(stream))
+    assert exported['ml_development_eligible'] == 'False'
+    manifest.update(frozen=True)
+    manifest['gates'].update({k: {'passed': True} for k in ('time', 'mesh', 'damage_sensitivity', 'development_time_audit')})
+    export_campaign(manifest, tmp_path)
+    with (tmp_path / 'samples.csv').open(encoding='utf-8-sig', newline='') as stream:
+        assert next(csv.DictReader(stream))['ml_development_eligible'] == 'True'
 
 
 def test_checkpoint_and_retries_are_bounded_and_upload_failure_never_restarts_solver():
@@ -59,6 +100,17 @@ def test_quota_counts_all_active_jobs_and_reserved_dispatches():
     assert available_slots(20, jobs, reserved=2) == 4
     assert available_slots(8, jobs) == 0
     assert available_slots(200, [], reserved=1) == 19
+
+
+def test_workflow_capacity_can_fill_160_actions_slots_with_a_smaller_license_pool():
+    manifest = {'capacity_stage': 160, 'workflow_capacity': 160, 'license_capacity': 128}
+    assert dispatch_capacity(manifest) == 160
+    assert manifest['license_capacity'] == 128
+    controller = {'status': 'in_progress', 'campaign_solver': False}
+    assert sum(available_slots(20, [controller] if owner == 0 else []) for owner in range(8)) == 159
+    assert dispatch_capacity({'capacity_stage': 160, 'license_capacity': 128}) == 128
+    assert dispatch_capacity({**manifest, 'workflow_capacity': 200}) == 160
+    assert dispatch_capacity({**manifest, 'capacity_stage': 0}) == 0
 
 
 def test_controller_does_not_consume_the_solver_budget_but_still_uses_owner_quota():

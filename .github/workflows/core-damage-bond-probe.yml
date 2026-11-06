@@ -1,0 +1,68 @@
+name: Core damage · native end bond regression
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+permissions:
+  contents: write
+  id-token: write
+jobs:
+  native-bonds:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      ABAQUS_MEDIA_DRIVE_FILE_ID: ${{ vars.ABAQUS_MEDIA_DRIVE_FILE_ID }}
+      ABAQUS_LICENSE_ENDPOINT: ${{ secrets.ABAQUS_LICENSE_ENDPOINT }}
+      ABAQUS_VENDOR_PORT: ${{ secrets.ABAQUS_VENDOR_PORT }}
+      GITHUB_TOKEN: ${{ github.token }}
+      HONEYCOMB_ACTIONS_LOG: '1'
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.3.0
+      - run: uv sync --locked --extra cloud --extra campaign
+      - name: Reclaim disposable SDK storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          for directory in /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /usr/local/share/powershell /usr/local/share/chromium /opt/az /usr/lib/jvm /opt/hostedtoolcache/CodeQL; do
+            if test -d "$directory" && ! test -L "$directory"; then
+              sudo rm -rf --one-file-system -- "$directory"
+            fi
+          done
+          uv run --locked python scripts/reclaim_runner_disk.py
+          sudo apt-get clean
+          docker image prune --all --force
+      - uses: ./.github/actions/abaqus-runtime
+        with:
+          tailscale_id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          drive_credentials: ${{ secrets.HONEYCOMB_DRIVE_CREDENTIALS_JSON }}
+      - name: Release installation media
+        shell: bash
+        run: |
+          set -euo pipefail
+          mountpoint="$RUNNER_TEMP/abaqus-mount"
+          media="$RUNNER_TEMP/abaqus-media-inspection/iso/DS.SIMULIA.Suite.2020.Linux64_Softgozar.com.iso"
+          if mountpoint -q "$mountpoint"; then sudo umount "$mountpoint"; fi
+          test -f "$media"
+          rm -- "$media"
+      - name: Verify all eight repaired bonds and preserved core mass with Abaqus
+        run: uv run --locked --extra cloud --extra campaign python scripts/verify_core_end_bonds.py
+      - uses: actions/upload-artifact@v7.0.2
+        if: always()
+        with:
+          name: native-end-bond-regression-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            output/core-end-bond*.json
+            output/actions-logs/**
+            /tmp/honeycomb-end-bond-probe/**/raw/*.dat
+            /tmp/honeycomb-end-bond-probe/**/raw/*.log
+            /tmp/honeycomb-end-bond-probe/**/raw/model_manifest.json

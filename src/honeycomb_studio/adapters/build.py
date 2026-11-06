@@ -78,7 +78,7 @@ m.HomogeneousShellSection(name='Bottom-Facesheet-Section',material=FACE_MATERIAL
 angle=math.radians(P['core_angle']); co=math.cos(angle); si=math.sin(angle)
 if IS_REENTRANT:
     sys.path.insert(0,P['adapter_directory'])
-    from reentrant import network
+    from reentrant import network, bond_faces
     walls=network(P['panel'],P['core_height'],P['cell_size'],P['reentrant_cell_height'],
                   P['reentrant_indent'],P['phase_x'],P['phase_z'],P['min_segment_length'])
 elif P.get('hex_geometry','regular')=='parametric':
@@ -118,14 +118,32 @@ core.SectionAssignment(region=core.sets['SINGLE_FOIL'],sectionName='Single-Foil-
 core.SectionAssignment(region=core.sets['DOUBLE_FOIL'],sectionName='Double-Foil-Section')
 if IS_REENTRANT:
     h=P['core_height']/2.
+    bond_top_y=h; bond_bottom_y=-h
     topedges=core.edges.getByBoundingBox(yMin=h-.00001,yMax=h+.00001)
     botedges=core.edges.getByBoundingBox(yMin=-h-.00001,yMax=-h+.00001)
 else:
     topedges=core.edges.getByBoundingBox(zMin=P['core_height']-.00001,zMax=P['core_height']+.00001)
     botedges=core.edges.getByBoundingBox(zMin=-.00001,zMax=.00001)
-assert len(topedges)>0 and len(botedges)>0
-core.Surface(name='TOP_BOND',side1Edges=topedges)
-core.Surface(name='BOTTOM_BOND',side1Edges=botedges)
+P['core_end_bond_selection']={}
+for end,edges,target in [('TOP',topedges,P['core_height']/2.),('BOTTOM',botedges,-P['core_height']/2.)]:
+    if len(edges)>0:
+        core.Surface(name=end+'_BOND',side1Edges=edges)
+        P['core_end_bond_selection'][end]={'kind':'nominal_edges','gap_mm':0.}
+    elif IS_REENTRANT:
+        points=[v.pointOn[0] for v in core.vertices]
+        vertices=[f.getVertices() for f in core.faces]
+        coordinate,indices=bond_faces(points,vertices,target,P['tie_tolerance'])
+        endfaces=core.faces[0:0]
+        for i in indices: endfaces+=core.faces[i:i+1]
+        core.Surface(name=end+'_BOND',side12Faces=endfaces)
+        if end=='TOP': bond_top_y=coordinate
+        else: bond_bottom_y=coordinate
+        P['core_end_bond_selection'][end]={'kind':'end_cap_faces','coordinate_mm':coordinate,
+            'gap_mm':abs(target-coordinate),'tie_tolerance_mm':P['tie_tolerance'],'face_count':len(indices)}
+        log('CORE_BOND %s: %d complete end faces; gap %.9g mm within Tie %.9g mm'%
+            (end,len(indices),abs(target-coordinate),P['tie_tolerance']))
+    else:
+        raise ValueError('Missing nominal core bond edges')
 core.seedPart(size=P['core_outer_seed'],deviationFactor=0.1,minSizeFactor=0.1)
 for e in core.edges:
     v=e.getVertices()
@@ -150,8 +168,8 @@ if IS_REENTRANT:
     ends={'TOP':[],'BOTTOM':[]}; h=P['core_height']/2.
     for elem in core.elements:
         ys=[node_y[i] for i in elem.connectivity]
-        if max(ys)>h-1.e-5: ends['TOP'].append(elem.label)
-        if min(ys)<-h+1.e-5: ends['BOTTOM'].append(elem.label)
+        if max(ys)>bond_top_y-1.e-5: ends['TOP'].append(elem.label)
+        if min(ys)<bond_bottom_y+1.e-5: ends['BOTTOM'].append(elem.label)
     for end in ('TOP','BOTTOM'):
         core.Surface(name=end+'_BOND_CONTACT_EXCLUSION',side12Elements=core.elements.sequenceFromLabels(ends[end]))
     P['bond_contact_treatment']='Exclude core end-row contact with the tied facesheet only; core self-contact remains active'

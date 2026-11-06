@@ -26,3 +26,11 @@ jobs:
           CAMPAIGN_APP_PRIVATE_KEY: ${{ secrets.CAMPAIGN_APP_PRIVATE_KEY }}
           CORE_DAMAGE_CAMPAIGN_ID: ${{ vars.CORE_DAMAGE_CAMPAIGN_ID || 'core-damage-v2-20261106' }}
         run: uv run --locked --extra cloud --extra campaign python scripts/campaign_controller.py tick --campaign-id "$CORE_DAMAGE_CAMPAIGN_ID"
+      - name: Keep the active campaign moving between scheduled events
+        env:
+          CAMPAIGN_APP_ID: ${{ vars.CAMPAIGN_APP_ID }}
+          CAMPAIGN_APP_PRIVATE_KEY: ${{ secrets.CAMPAIGN_APP_PRIVATE_KEY }}
+          CORE_DAMAGE_CAMPAIGN_ID: ${{ vars.CORE_DAMAGE_CAMPAIGN_ID || 'core-damage-v2-20261106' }}
+        run: |
+          sleep 30
+          uv run --locked --extra cloud --extra campaign python scripts/campaign_controller.py relay --campaign-id "$CORE_DAMAGE_CAMPAIGN_ID"
