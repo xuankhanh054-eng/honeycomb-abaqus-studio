@@ -1,5 +1,6 @@
 """Resume an immutable, completed ODB without ever admitting a new FE process."""
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -117,6 +118,20 @@ def claim_recovery(old, workflow, original_workflow, original_source):
     return {**old, 'publication_status': 'claimed', 'publication_workflow_run_id': workflow}
 
 
+def completed_recovery_receipt(root, work, workflow):
+    path = root / 'campaign-execution.json'
+    try:
+        if path.stat().st_size > 2 * 1024 * 1024:
+            return False
+        result = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    return (result.get('outcome') == 'completed' and result.get('postprocess_workflow_run_id') == workflow
+            and result.get('workflow_run_id') == work['workflow_run_id']
+            and result.get('source_sha') == work['source_sha']
+            and result.get('new_fe_processes') == 0 and bool(result.get('original_odb_sha256')))
+
+
 def execute(work, github, catalog, key):
     original_source = source_sha()
     if work['source_sha'] != original_source or digest(require_qualification(Path.cwd())) != work['runtime_hash']:
@@ -191,8 +206,12 @@ def main():
         return
     work, _ = catalog.get(key)
     if args.mode == 'failure':
-        if work and work.get('publication_workflow_run_id') == workflow and ROOT.exists():
-            catalog.update(key, lambda old: {**old, 'postprocess_artifact_run_id': workflow})
+        if (work and work.get('publication_workflow_run_id') == workflow
+                and completed_recovery_receipt(ROOT, work, workflow)):
+            artifacts = github.repo('GET', f'/actions/runs/{workflow}/artifacts?per_page=100')['artifacts']
+            retained = [a for a in artifacts if a['name'] == 'core-damage-' + work['ticket'] and not a['expired']]
+            if len(retained) == 1:
+                catalog.update(key, lambda old: {**old, 'postprocess_artifact_run_id': workflow})
         return
     if not work or work.get('publication_workflow_run_id') != workflow:
         raise ValueError('Postprocess worker has no exclusive claim')

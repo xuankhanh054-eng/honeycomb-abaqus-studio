@@ -143,6 +143,71 @@ def test_postprocess_claim_rejects_a_duplicate_or_other_source():
         module.claim_recovery(work, 456, 123, 'different')
 
 
+def test_failed_artifact_download_cannot_replace_the_immutable_original(tmp_path, monkeypatch):
+    module = tool()
+    work = dict(publication_workflow_run_id=456, workflow_run_id=123, source_sha='original',
+                postprocess_artifact_run_id=123)
+    updates = []
+
+    class Catalog:
+        def __init__(self, github):
+            pass
+
+        def get(self, key):
+            return work, None
+
+        def update(self, key, transform):
+            updates.append(transform(work))
+
+    monkeypatch.setattr(module, 'Catalog', Catalog)
+    monkeypatch.setattr(module, 'Github', lambda **kwargs: object())
+    monkeypatch.setattr(module, 'ROOT', tmp_path)
+    monkeypatch.setattr(module.sys, 'argv', ['campaign_postprocess.py', 'failure'])
+    for key, value in dict(GITHUB_TOKEN='test', GITHUB_RUN_ID='456',
+                           CAMPAIGN_ID='core-damage-v2-20261107', TICKET='a' * 32).items():
+        monkeypatch.setenv(key, value)
+    (tmp_path / 'partial.odb').write_bytes(b'incomplete transport bytes')
+    module.main()
+    assert not updates or updates[-1]['postprocess_artifact_run_id'] == 123
+
+
+@pytest.mark.parametrize('receipt_run,retained,expected', [(456, True, 456), (123, True, 123), (456, False, 123)])
+def test_only_this_attempts_completed_exports_can_replace_the_retained_artifact(tmp_path, monkeypatch,
+                                                                              receipt_run, retained, expected):
+    from types import SimpleNamespace
+
+    from honeycomb_studio.store import write_json
+
+    module = tool()
+    work = dict(ticket='a' * 32, publication_workflow_run_id=456, workflow_run_id=123,
+                source_sha='original', postprocess_artifact_run_id=123)
+    updates = []
+
+    class Catalog:
+        def __init__(self, github):
+            pass
+
+        def get(self, key):
+            return work, None
+
+        def update(self, key, transform):
+            updates.append(transform(work))
+
+    artifact = dict(name='core-damage-' + 'a' * 32, expired=False)
+    monkeypatch.setattr(module, 'Catalog', Catalog)
+    monkeypatch.setattr(module, 'Github', lambda **kwargs: SimpleNamespace(repo=lambda *a:
+                        {'artifacts': [artifact] if retained else []}))
+    monkeypatch.setattr(module, 'ROOT', tmp_path)
+    monkeypatch.setattr(module.sys, 'argv', ['campaign_postprocess.py', 'failure'])
+    for key, value in dict(GITHUB_TOKEN='test', GITHUB_RUN_ID='456',
+                           CAMPAIGN_ID='core-damage-v2-20261107', TICKET='a' * 32).items():
+        monkeypatch.setenv(key, value)
+    write_json(tmp_path / 'campaign-execution.json', {**work, 'outcome': 'completed',
+        'postprocess_workflow_run_id': receipt_run, 'new_fe_processes': 0, 'original_odb_sha256': 'a' * 64})
+    module.main()
+    assert (updates[-1] if updates else work)['postprocess_artifact_run_id'] == expected
+
+
 def test_controller_retries_postprocessing_with_separate_original_and_tool_revisions(monkeypatch):
     tool()
     import campaign_controller

@@ -40,6 +40,7 @@ jobs:
       CAMPAIGN_ID: ${{ inputs.campaign_id }}
       TICKET: ${{ inputs.ticket }}
       ORIGINAL_RUN_ID: ${{ inputs.original_run_id }}
+      ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
       PROCESSOR_SOURCE_SHA: ${{ inputs.processor_source_sha }}
       GITHUB_TOKEN: ${{ github.token }}
       HONEYCOMB_ACTIONS_LOG: '1'
@@ -71,12 +72,8 @@ jobs:
           sudo apt-get clean
           docker image prune --all --force
           df -B1 / /mnt
-      - uses: actions/download-artifact@v8.0.1
-        with:
-          name: core-damage-${{ inputs.ticket }}
-          github-token: ${{ github.token }}
-          run-id: ${{ inputs.artifact_run_id }}
-          path: /tmp/honeycomb-results
+      - name: Resume artifact ranges and verify immutable SHA-256 before extraction
+        run: uv run --locked --extra cloud python postprocess-tools/scripts/campaign_artifact_transfer.py
       - uses: ./.github/actions/abaqus-runtime
         with:
           tailscale_id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
