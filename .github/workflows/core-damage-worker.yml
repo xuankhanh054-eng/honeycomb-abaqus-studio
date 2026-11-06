@@ -58,6 +58,27 @@ jobs:
           sudo apt-get clean
           docker image prune --all --force
           df -B1 / /mnt
+      - name: Check design storage before downloading the runtime
+        shell: bash
+        run: |
+          uv run --locked --extra cloud --extra campaign python - <<'PY'
+          import json, os, shutil
+          from honeycomb_studio.campaign import one_run_spec
+          from honeycomb_studio.campaign_queue import ticket_key
+          from honeycomb_studio.cloud_github import Catalog, Github
+          from honeycomb_studio.estimates import predict
+          from honeycomb_studio.models import ModelSpec
+          work, _ = Catalog(Github(token=os.environ['GITHUB_TOKEN'])).get(
+              ticket_key(os.environ['CAMPAIGN_ID'], os.environ['TICKET']))
+          spec = one_run_spec(work['design'])
+          required = predict(ModelSpec.model_validate(work['design']['model']).resolved())['recommended_free_gb_above_reserve'] + spec['min_free_gb']
+          available = shutil.disk_usage('/tmp').free / 1e9
+          print(json.dumps({'design_id': work['design']['id'], 'available_GB': available,
+                            'required_GB_above_installed_runtime': required,
+                            'physics_changed': False}), flush=True)
+          if available < required:
+              raise SystemExit('Preparation blocked: insufficient disk even before runtime installation')
+          PY
       - uses: ./.github/actions/abaqus-runtime
         with:
           tailscale_id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
