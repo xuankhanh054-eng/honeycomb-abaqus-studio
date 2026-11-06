@@ -1,11 +1,14 @@
 """Resume an immutable, completed ODB without ever admitting a new FE process."""
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+
+import psutil
 
 # The workflow checks out the ORIGINAL solver source at cwd and this recovery
 # tool separately. Physics, extractor, and Engine imports remain the originals.
@@ -22,11 +25,50 @@ from honeycomb_studio.campaign_queue import ticket_key
 from honeycomb_studio.cloud_github import Catalog, Github
 from honeycomb_studio.data import checksum
 from honeycomb_studio.engine import Engine
+from honeycomb_studio.estimates import mesh_work, predict
 from honeycomb_studio.models import BatchSpec, digest, expand
 from honeycomb_studio.store import Store, write_json
 
 
 class PostprocessOnlyEngine(Engine):
+    def execute_wave(self, candidates, batch):
+        if len(candidates) != 1:
+            raise ValueError('Postprocessing requires exactly one original run')
+        run = candidates[0]
+        model, spec = run['resolved'], batch['spec']
+        if spec.get('export_all_fields') is not False:
+            raise ValueError('Recovery must preserve the original reduced-export policy')
+        # Equivalent to the qualified hard-link policy, including original
+        # sources whose Engine predates retained-ODB admission. Only admission
+        # lives here; the original Engine/extractor still produce every byte.
+        transfer = 1024**3 / 1e9
+        needed = max(transfer, predict(model)['raw_odb_gb'] + max(4., 2 * mesh_work(model)[0])
+                     + transfer - self._retained_solver_gb(run))
+        plan = {'cpu_available': psutil.cpu_count() or 1,
+                'ram_available_gb': psutil.virtual_memory().available / 1024**3,
+                'disk_available_gb': shutil.disk_usage(self.store.root).free / 1e9,
+                'disk_required_gb_above_reserve': needed, 'new_fe_processes': 0,
+                'disk_policy': 'completed-native-odb'}
+        self.store.event(batch['id'], run['id'], {'type': 'postprocess_admission', **plan})
+        if (plan['cpu_available'] < model['cpus']
+                or plan['ram_available_gb'] < spec.get('min_available_ram_gb', 2) + spec.get('ram_per_run_gb', 4)
+                or plan['disk_available_gb'] < spec.get('min_free_gb', 20) + needed):
+            raise RuntimeError('Insufficient CPU/RAM/export space for postprocessing the retained native ODB')
+        self.current_runs, self.current_run = {run['id']}, run['id']
+        try:
+            self._execute(run, batch)
+        finally:
+            self.current_runs, self.current_run = set(), None
+        return [self.store.get('runs', run['id'])]
+
+    def _retained_solver_gb(self, run):
+        if not run.get('attempts'):
+            return 0.
+        attempt = run['attempts'][-1]
+        raw = Path(attempt['path']) / 'raw'
+        return sum(p.stat().st_size for p in raw.glob(attempt['job_name'] + '.*')
+                   if p.is_file() and not p.is_symlink()) / 1e9
+
     def _monitor(self, r, a, phase, args, spool=None):
         if phase in ('building', 'checking', 'solving'):
             raise ValueError('A postprocess recovery must never start an FE process')

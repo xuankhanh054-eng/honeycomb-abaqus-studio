@@ -86,6 +86,51 @@ def test_recovery_uses_the_original_attempt_and_odb(tmp_path, monkeypatch):
     assert (Path(recovered[0]) / 'raw' / 'hc.odb').read_bytes() == b'unchanged completed native ODB'
 
 
+def test_postprocess_wave_does_not_reserve_space_for_a_second_native_odb(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import honeycomb_studio.engine as orchestration
+    from honeycomb_studio.execution import disk_requirement
+
+    module = tool()
+    store, design, _, _ = fixture(tmp_path)
+    run, batch, _ = module.prepare_completed_run(store, {'design': design})
+    linked = disk_requirement(batch['spec'], run['resolved'], linked_checkpoint=True)
+    full = disk_requirement(batch['spec'], run['resolved'])
+    assert linked < full
+    available = batch['spec']['min_free_gb'] + (linked + full) / 2
+    monkeypatch.setattr(orchestration.psutil, 'cpu_count', lambda: 4)
+    monkeypatch.setattr(orchestration.psutil, 'virtual_memory', lambda: SimpleNamespace(available=16 * 1024**3))
+    monkeypatch.setattr(orchestration.shutil, 'disk_usage', lambda path: SimpleNamespace(free=available * 1e9))
+    engine = module.PostprocessOnlyEngine(store, abaqus='must-not-run-fe', fake=False)
+    recovered = []
+    monkeypatch.setattr(engine, '_postprocess', lambda r, attempt, b: recovered.append(attempt['path']))
+    def legacy_admission(*args):
+        raise AssertionError('Original FE wave admission must not reserve another native ODB')
+    monkeypatch.setattr(orchestration.Engine, 'execute_wave', legacy_admission)
+    engine.execute_wave([run], batch)
+    assert recovered == [run['attempts'][0]['path']]
+
+
+@pytest.mark.parametrize('resource', ['cpu', 'ram', 'disk'])
+def test_postprocess_wave_still_enforces_original_resource_reserves(tmp_path, monkeypatch, resource):
+    from types import SimpleNamespace
+
+    import honeycomb_studio.engine as orchestration
+
+    module = tool()
+    store, design, _, _ = fixture(tmp_path)
+    run, batch, _ = module.prepare_completed_run(store, {'design': design})
+    monkeypatch.setattr(orchestration.psutil, 'cpu_count', lambda: 1 if resource == 'cpu' else 4)
+    monkeypatch.setattr(orchestration.psutil, 'virtual_memory', lambda: SimpleNamespace(
+        available=(1 if resource == 'ram' else 16) * 1024**3))
+    monkeypatch.setattr(orchestration.shutil, 'disk_usage', lambda path: SimpleNamespace(
+        free=(1 if resource == 'disk' else 1000) * 1e9))
+    engine = module.PostprocessOnlyEngine(store, abaqus='must-not-run-fe', fake=False)
+    with pytest.raises(RuntimeError, match='Insufficient CPU/RAM/export space'):
+        engine.execute_wave([run], batch)
+
+
 def test_postprocess_claim_rejects_a_duplicate_or_other_source():
     module = tool()
     work = dict(publication_kind='postprocess', publication_status='ready',
