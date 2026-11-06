@@ -91,18 +91,39 @@ def persist(store, manifest):
     store.catalog.update(key + '/meta', lambda old: metadata)
 
 
-def reconcile(store, manifest, app):
+def reconcile(store, manifest, app, publication_reservations=None):
     with ThreadPoolExecutor(max_workers=len(OWNERS)) as pool:
-        list(pool.map(lambda owner: reconcile_owner(store, manifest, app, owner), OWNERS))
+        list(pool.map(lambda owner: reconcile_owner(store, manifest, app, owner, publication_reservations), OWNERS))
     return manifest
 
 
-def reconcile_owner(store, manifest, app, owner):
+def reconcile_owner(store, manifest, app, owner, publication_reservations=None):
+    publication_budget = None
+
+    def admit_publication():
+        nonlocal publication_budget
+        if owner != CANONICAL.split('/')[0]:
+            return True  # GitHub starts queued recovery jobs within this owner's quota.
+        if publication_budget is None:
+            github = app.repository(owner + '/honeycomb-abaqus-studio')
+            jobs = [job for job in page_jobs(github)
+                    if job.get('workflow_path') != '.github/workflows/core-damage-controller.yml']
+            reserved = 1 + sum(r['owner'] == owner and r['status'] == 'dispatching'
+                               and not r.get('workflow_run_id')
+                               for r in manifest['designs'] + manifest['pilot_designs'])
+            publication_budget = available_slots(20, jobs, reserved)
+        if publication_budget <= 0:
+            return False
+        publication_budget -= 1
+        return True
+
     for row in manifest['designs'] + manifest['pilot_designs']:
         if row['owner'] != owner:
             continue
         if row['status'] == 'publication_pending':
-            reconcile_publication(manifest, row, app)
+            dispatched = reconcile_publication(manifest, row, app, admit_dispatch=admit_publication)
+            if dispatched and publication_reservations is not None:
+                publication_reservations[owner] = publication_reservations.get(owner, 0) + 1
             continue
         if row['status'] != 'dispatching' or not row.get('ticket'):
             continue
@@ -171,7 +192,7 @@ def route_completed_odb(manifest, row, work, github):
     return True
 
 
-def reconcile_publication(manifest, row, app):
+def reconcile_publication(manifest, row, app, *, admit_dispatch=None):
     github = app.repository(row['repository'])
     catalog = Catalog(github)
     key = ticket_key(manifest['id'], row['publication_ticket'])
@@ -211,6 +232,8 @@ def reconcile_publication(manifest, row, app):
     if len(retained) != 1:
         row.update(status='needs_investigation', error='Computed output artifact unavailable; do not restart the solver for an upload error')
         return
+    if admit_dispatch and not admit_dispatch():
+        return
     catalog.update(key, lambda old: {**old, 'publication_status': 'ready', 'publication_workflow_run_id': None,
                    'publication_attempt': old.get('publication_attempt', 0) + 1,
                    'publication_dispatched_at': time.time(), 'fallback_artifact_id': retained[0]['id']})
@@ -221,6 +244,7 @@ def reconcile_publication(manifest, row, app):
         workflow = 'core-damage-postprocess.yml'
         inputs.update(processor_source_sha=work['postprocess_source_sha'], artifact_run_id=str(artifact_run))
     github.repo('POST', '/actions/workflows/' + workflow + '/dispatches', {'ref': 'main', 'inputs': inputs})
+    return True
 
 
 def status_report(manifest):
@@ -277,14 +301,14 @@ def reconcile_analysis(manifest, app):
         dispatch_analysis(app, manifest)
 
 
-def fill_owner_slots(store, app, manifest, rows, capacity, owner):
+def fill_owner_slots(store, app, manifest, rows, capacity, owner, publication_reserved=0):
     github = app.repository(owner + '/honeycomb-abaqus-studio')
     index = OWNERS.index(owner)
     owner_budget = capacity // 8 + (index < capacity % 8)
     if not owner_budget:
         return owner, {}
-    reserved = sum(r['owner'] == owner and r['status'] == 'dispatching' and not r.get('workflow_run_id')
-                   for r in manifest['designs'] + manifest['pilot_designs'])
+    reserved = publication_reserved + sum(r['owner'] == owner and r['status'] == 'dispatching'
+                    and not r.get('workflow_run_id') for r in manifest['designs'] + manifest['pilot_designs'])
     warnings = []
     owner_jobs = page_jobs(github, warnings=warnings)
     if owner == CANONICAL.split('/')[0]:
@@ -306,7 +330,8 @@ def fill_owner_slots(store, app, manifest, rows, capacity, owner):
 
 
 def tick(store, app, identity):
-    manifest = reconcile(store, store.load(identity), app)
+    publication_reservations = {}
+    manifest = reconcile(store, store.load(identity), app, publication_reservations)
     manifest = ingest_evidence(store, manifest, app)
     manifest = advance(manifest)
     manifest = ramp_capacity(manifest)
@@ -324,7 +349,8 @@ def tick(store, app, identity):
     if manifest.get('enabled') and capacity:
         rows = dispatch_candidates(manifest)
         with ThreadPoolExecutor(max_workers=len(OWNERS)) as pool:
-            observations = pool.map(lambda owner: fill_owner_slots(store, app, manifest, rows, capacity, owner), OWNERS)
+            observations = pool.map(lambda owner: fill_owner_slots(store, app, manifest, rows, capacity, owner,
+                                    publication_reservations.get(owner, 0)), OWNERS)
             for owner, observation in observations:
                 manifest.setdefault('quota_observation', {})[owner] = observation
     if manifest.get('quota_observation'):
