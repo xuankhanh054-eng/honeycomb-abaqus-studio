@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from honeycomb_studio.cloud_api import create_app
-from honeycomb_studio.cloud_github import Github
+from honeycomb_studio.cloud_github import REPOSITORY, Github
 from honeycomb_studio.cloud_solver_download import (
     download_package,
     download_script,
@@ -30,7 +30,7 @@ def fixture():
             data = f"run {run} {extension}".encode()
             sha = hashlib.sha256(data).hexdigest()
             path = f"job/04_solver_archive/run-{run:04d}/source-{SOURCE}/attempts/001/raw/model{run}.{extension}"
-            url = f"https://github.com/xuankhanh24/honeycomb-abaqus-studio/releases/download/test/{run}-{extension}"
+            url = f"https://github.com/{REPOSITORY}/releases/download/test/{run}-{extension}"
             files.append({"path": path, "bytes": len(data), "sha256": sha,
                           "parts": [{"index": 0, "offset": 0, "bytes": len(data), "sha256": sha,
                                      "digest": "sha256:" + sha, "url": url}]})
@@ -40,7 +40,7 @@ def fixture():
     files.append(check)
     manifest = {"schema_version": "1", "kind": "honeycomb-release-archive", "complete": True, "files": files}
     collection = {"files": [{k: v for k, v in f.items() if k != "parts"} for f in files],
-                  "full_manifest_url": "https://github.com/xuankhanh24/honeycomb-abaqus-studio/releases/download/test/full-source-manifest.json"}
+                  "full_manifest_url": f"https://github.com/{REPOSITORY}/releases/download/test/full-source-manifest.json"}
     job = {"name": "Delta", "status": "completed", "spec": {"axes": [{"parameter": "reentrant_delta_deg"}]},
            "shards": [{"id": SOURCE, "spec": {"model": {"reentrant_delta_deg": 36}}}]}
     return manifest, collection, job, bodies

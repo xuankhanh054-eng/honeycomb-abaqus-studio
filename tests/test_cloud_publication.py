@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from honeycomb_studio.cloud_archive import ReleaseArchive
-from honeycomb_studio.cloud_github import Github
+from honeycomb_studio.cloud_github import REPOSITORY, Github
 from honeycomb_studio.cloud_publication import prepare
 
 
@@ -64,7 +64,7 @@ def test_upload_retries_after_lost_response_and_reuses_verified_asset(tmp_path, 
     assert calls == ["post"]
     assert uploaded["asset_id"] == 1
     tagged = ReleaseArchive(Remote(), 1, tag="job-data-stable").upload(path, "test.part")
-    assert tagged["url"] == "https://github.com/xuankhanh24/honeycomb-abaqus-studio/releases/download/job-data-stable/test.part"
+    assert tagged["url"] == f"https://github.com/{REPOSITORY}/releases/download/job-data-stable/test.part"
     assert tagged["digest"] == uploaded["digest"]
     asset["digest"] = "sha256:" + "0" * 64
     with pytest.raises(ValueError, match="digest"):
@@ -150,7 +150,7 @@ def test_native_checkpoint_publication_restores_every_inventory_file(tmp_path, m
     payloads = {}
 
     def upload(self, path, name):
-        url = 'https://github.com/xuankhanh24/honeycomb-abaqus-studio/releases/download/test/' + name
+        url = f'https://github.com/{REPOSITORY}/releases/download/test/' + name
         payloads[url] = path.read_bytes()
         return dict(url=url, bytes=path.stat().st_size, digest='sha256:' + hashlib.sha256(path.read_bytes()).hexdigest())
 

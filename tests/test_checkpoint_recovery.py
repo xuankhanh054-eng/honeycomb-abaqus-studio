@@ -3,6 +3,7 @@ from copy import deepcopy
 import pytest
 
 from honeycomb_studio.cloud_checkpoint import completed_checkpoint
+from honeycomb_studio.cloud_github import REPOSITORY
 
 
 def fixture():
@@ -10,7 +11,7 @@ def fixture():
              'complete.json', 'impact_history.csv', 'model.odb']
     files, assets = [], []
     for i, name in enumerate(names):
-        url = f'https://github.com/xuankhanh24/honeycomb-abaqus-studio/releases/download/fixture/{i}'
+        url = f'https://github.com/{REPOSITORY}/releases/download/fixture/{i}'
         part = {'index': 0, 'offset': 0, 'bytes': 1, 'sha256': 'a' * 64,
                 'digest': 'sha256:' + 'a' * 64, 'asset_id': i, 'url': url}
         files.append({'path': f'projects/p/batches/b/runs/r/attempts/001/{name}',

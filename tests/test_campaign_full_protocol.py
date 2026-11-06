@@ -29,6 +29,24 @@ def test_full_campaign_does_not_change_velocity_for_a_small_pilot_response():
     assert len(result['pilot_designs']) == 3
 
 
+def test_controller_overlaps_only_explicitly_prefetched_qualification_checks():
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
+    from campaign_controller import dispatch_candidates
+
+    manifest = campaign_manifest()
+    manifest.update(phase='pilot', execution_scope='full')
+    checks = qualification_designs(8., .012)
+    manifest['designs'].extend(checks)
+    manifest['prefetched_qualification_ids'] = [checks[0]['id'], manifest['designs'][0]['id']]
+    candidates = dispatch_candidates(manifest)
+    assert {r['id'] for r in candidates} == {r['id'] for r in manifest['pilot_designs']} | {checks[0]['id']}
+    manifest['execution_scope'] = 'pilot'
+    assert dispatch_candidates(manifest) == manifest['pilot_designs']
+
+
 def test_failed_eight_ms_time_gate_does_not_allocate_sixteen_ms():
     manifest = campaign_manifest()
     manifest.update(phase='time', execution_scope='full', selected_velocity_m_s=8., trial_duration_s=.008)

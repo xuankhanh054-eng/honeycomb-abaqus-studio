@@ -5,6 +5,7 @@ from copy import deepcopy
 
 import pytest
 
+from honeycomb_studio.cloud_github import REPOSITORY
 from honeycomb_studio.job_data import standalone_downloader
 
 
@@ -17,7 +18,7 @@ def package():
         sha = hashlib.sha256(chunk).hexdigest()
         parts.append({"index": index, "offset": offset, "bytes": len(chunk), "sha256": sha,
                       "digest": "sha256:" + sha,
-                      "url": f"https://github.com/xuankhanh24/honeycomb-abaqus-studio/releases/download/test/{index}"})
+                      "url": f"https://github.com/{REPOSITORY}/releases/download/test/{index}"})
         offset += len(chunk)
     return {"folder": "job", "readable_prefix": "job/00_dataset_versions/test",
             "storage_mode": "direct-source-parts", "complete": True,
@@ -62,13 +63,15 @@ def test_resume_preserves_verified_parts_and_adds_only_new_files(tmp_path, monke
     assert len(downloads) == 2  # Only the newly added attempt.
 
 
-@pytest.mark.parametrize("change", ["path", "url", "offset", "duplicate"])
+@pytest.mark.parametrize("change", ["path", "url", "other_repository", "offset", "duplicate"])
 def test_invalid_inventory_fails_before_network(tmp_path, monkeypatch, change):
     manifest, _ = package()
     if change == "path":
         manifest["files"][0]["path"] = "../escape.odb"
     elif change == "url":
         manifest["files"][0]["parts"][0]["url"] = "https://example.com/payload"
+    elif change == 'other_repository':
+        manifest['files'][0]['parts'][0]['url'] = 'https://github.com/unowned/repository/releases/download/test/0'
     elif change == "offset":
         manifest["files"][0]["parts"][1]["offset"] += 1
     else:

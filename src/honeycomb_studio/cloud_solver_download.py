@@ -116,5 +116,7 @@ def download_package(manifest, choice, files):
 
 def download_script(package):
     source = Path(__file__).with_name("standalone_download.py").read_text(encoding="utf-8-sig")
+    source = source.replace("REPOSITORY = 'xuankhanh24/honeycomb-abaqus-studio'  # replaced in generated download_full.py",
+                            'REPOSITORY = ' + repr(REPOSITORY))
     return source.replace('MANIFEST = json.loads("{}")  # replaced in generated download_full.py',
                           "MANIFEST = json.loads(" + repr(json.dumps(package, ensure_ascii=True)) + ")")

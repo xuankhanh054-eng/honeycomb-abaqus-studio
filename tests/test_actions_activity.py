@@ -2,7 +2,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from honeycomb_studio.cloud_api import create_app
-from honeycomb_studio.cloud_github import Catalog, Github
+from honeycomb_studio.cloud_github import REPOSITORY, Catalog, Github
 
 
 def test_activity_only_observes_known_workflows_and_builds_owned_links():
@@ -19,7 +19,7 @@ def test_activity_only_observes_known_workflows_and_builds_owned_links():
         value = client.get("/api/activity").json()
     assert value["available"] is True
     assert len(value["runs"]) == 1
-    assert value["runs"][0]["url"] == "https://github.com/xuankhanh24/honeycomb-abaqus-studio/actions/runs/123"
+    assert value["runs"][0]["url"] == f"https://github.com/{REPOSITORY}/actions/runs/123"
     assert value["runs"][0]["scope"] == "Thử nghiệm native 7 J"
     assert all(r.method == "GET" and "/actions/runs" in r.url.path for r in requests)
 

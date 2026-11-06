@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 MANIFEST = json.loads("{}")  # replaced in generated download_full.py
+REPOSITORY = 'xuankhanh24/honeycomb-abaqus-studio'  # replaced in generated download_full.py
 
 
 def destination(relative):
@@ -53,7 +54,7 @@ def validate():
         for index, part in enumerate(file['parts']):
             url = urlsplit(part['url'])
             if (url.scheme != 'https' or url.netloc != 'github.com' or url.query or url.fragment
-                    or not url.path.startswith('/xuankhanh24/honeycomb-abaqus-studio/releases/download/')
+                    or not url.path.startswith('/' + REPOSITORY + '/releases/download/')
                     or any(p in ('.', '..') for p in url.path.split('/'))):
                 raise ValueError('Unexpected download source')
             if (part['index'] != index or part['offset'] != offset or type(part['bytes']) is not int

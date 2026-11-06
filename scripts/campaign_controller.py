@@ -203,7 +203,7 @@ def tick(store, app, identity):
     dispatcher = Dispatcher(store, app)
     capacity = min(manifest.get('capacity_stage', 8), manifest.get('license_capacity', 0), 160)
     if manifest.get('enabled') and capacity:
-        rows = runnable(manifest)
+        rows = dispatch_candidates(manifest)
         for i, owner in enumerate(OWNERS):
             github = app.repository(owner + '/honeycomb-abaqus-studio')
             owner_budget = capacity // 8 + (i < capacity % 8)
@@ -227,6 +227,17 @@ def tick(store, app, identity):
     report = status_report(manifest)
     store.catalog.update(campaign_key(identity) + '/status', lambda old: report)
     return report
+
+
+def dispatch_candidates(manifest):
+    """Overlap explicitly planned time/mesh checks with pilots under the same quota."""
+    rows = runnable(manifest)
+    if manifest.get('execution_scope') != 'full' or manifest.get('phase') not in ('pilot', 'time', 'mesh'):
+        return rows
+    requested = set(manifest.get('prefetched_qualification_ids', []))
+    existing = {r['id'] for r in rows}
+    return rows + [r for r in manifest['designs'] if r['id'] in requested and r['id'] not in existing
+                   and r['role'] == 'qualification' and r.get('purpose') in ('time', 'mesh')]
 
 
 def main():

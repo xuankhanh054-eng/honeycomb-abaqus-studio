@@ -8,9 +8,9 @@
   "cloud_quality.py": "9f8420147a65aa8bf9d852287c56f26c689fcad0a70b94f767b53fd1399553a3",
   "cloud_api.py": "5343c78a05e00d4bf388ef1748caf19b1c0f4f9b0b70d5d3f8b3a69537f9e377",
   "cloud_runtime.py": "e7f4e5f0c4e1f7b33202baaa0d84dc1c8bf8c4be28fee57528355cf8da394d51",
-  "cloud_solver_download.py": "febf941362335c03af5e471d049e2513a8cb9c61467c9788048bde3a2b5b7661",
+  "cloud_solver_download.py": "e536a35f5c318582d0dcffaa32d2f94ed0c89212702386aae6bbeb2d237d3dee",
   "cloud_restore.py": "2c10cb0bd6982f2ea94750bc99b2cc77ce026340eafd24ccb6c06ddb87291c2c",
-  "standalone_download.py": "c0b43614307ab527b173f866c9f7068ceb9b0c0e23c5715c1fe820deb942f1a8",
+  "standalone_download.py": "23914fe2e7f4f60e214dc70b791f36a1b00de2aa67761f114c554f40a8c65bbc",
   "runtime-evidence.json": "52616cd698b6162bd107ed5a7b2d94fe50ef18f92e8c3ae76f5def89ea9e7473",
   "adapters/reentrant.py": "ff008f42cbd0d08de9080d1df3b80a662ccb0af36a5e4de4aae3b76a335c51ae",
   "adapters/hexagonal.py": "d7378e2bdb363b4c245a2dc9f6fbba40c4c86815ba59338c19a8539ba1db7e26"

@@ -7,6 +7,7 @@ import re
 import unicodedata
 from copy import deepcopy
 
+from .cloud_github import REPOSITORY
 from .cloud_restore import validate_manifest
 
 
@@ -61,6 +62,8 @@ def standalone_downloader(bundle_manifest):
         from pathlib import Path
 
         source = Path(__file__).with_name("standalone_download.py").read_text(encoding="utf-8-sig")
+        source = source.replace("REPOSITORY = 'xuankhanh24/honeycomb-abaqus-studio'  # replaced in generated download_full.py",
+                                'REPOSITORY = ' + repr(REPOSITORY))
         return source.replace('MANIFEST = json.loads("{}")  # replaced in generated download_full.py',
                               "MANIFEST = json.loads(" + repr(json.dumps(bundle_manifest, ensure_ascii=True)) + ")")
     return '''"""Run: py download_full.py. No packages or license required."""
@@ -90,7 +93,7 @@ def main():
             total = 0
             for part in entry["parts"]:
                 url = part["url"]
-                if not url.startswith("https://github.com/xuankhanh24/honeycomb-abaqus-studio/releases/download/"):
+                if not url.startswith("https://github.com/__REPOSITORY__/releases/download/"):
                     raise ValueError("Unexpected download source")
                 digest = hashlib.sha256()
                 count = 0
@@ -133,4 +136,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-'''.replace("__MANIFEST__", repr(json.dumps(bundle_manifest, ensure_ascii=True)))
+'''.replace("__MANIFEST__", repr(json.dumps(bundle_manifest, ensure_ascii=True))).replace('__REPOSITORY__', REPOSITORY)
