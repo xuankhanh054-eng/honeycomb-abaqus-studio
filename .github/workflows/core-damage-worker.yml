@@ -42,11 +42,37 @@ jobs:
       - run: uv sync --locked --extra cloud --extra campaign
       - name: Atomically claim one execution ticket before preparation
         run: uv run --locked --extra cloud python scripts/campaign_worker.py claim --campaign-id "$CAMPAIGN_ID" --ticket "$TICKET"
+      - name: Reclaim hosted runner disk for the unchanged research output
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          df -B1 / /mnt
+          # Fixed disposable SDK paths on the ephemeral Linux runner only.
+          # Keep Docker, system Python, Node Actions and the checked-out source.
+          for directory in /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /usr/local/share/powershell /usr/local/share/chromium /opt/az /usr/lib/jvm /opt/hostedtoolcache/CodeQL; do
+            if test -d "$directory" && ! test -L "$directory"; then
+              sudo rm -rf --one-file-system -- "$directory"
+            fi
+          done
+          sudo apt-get clean
+          docker image prune --all --force
+          df -B1 / /mnt
       - uses: ./.github/actions/abaqus-runtime
         with:
           tailscale_id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           audience: ${{ secrets.TS_AUDIENCE }}
           drive_credentials: ${{ secrets.HONEYCOMB_DRIVE_CREDENTIALS_JSON }}
+      - name: Release verified installation media before resource admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          mountpoint="$RUNNER_TEMP/abaqus-mount"
+          media="$RUNNER_TEMP/abaqus-media-inspection/iso/DS.SIMULIA.Suite.2020.Linux64_Softgozar.com.iso"
+          if mountpoint -q "$mountpoint"; then sudo umount "$mountpoint"; fi
+          test -f "$media"
+          rm -- "$media"
+          df -B1 / /mnt
       - name: Solve or restore the exact predecessor state
         run: uv run --locked --extra cloud python scripts/campaign_worker.py run --campaign-id "$CAMPAIGN_ID" --ticket "$TICKET"
       - uses: actions/upload-artifact@v7.0.2
