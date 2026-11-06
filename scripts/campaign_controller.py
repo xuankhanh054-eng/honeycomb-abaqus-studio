@@ -9,6 +9,8 @@ import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
+import httpx
+
 from honeycomb_studio.campaign import OWNERS, campaign_manifest, progress
 from honeycomb_studio.campaign_acceptance import import_evidence
 from honeycomb_studio.campaign_artifact import completed_odb_evidence
@@ -359,11 +361,21 @@ def relay(store, app, identity, workflow_run_id):
     if not metadata or not metadata.get('enabled') or metadata.get('phase') not in active_phases:
         return {'controller_redispatched': False}
     github = app.repository(CANONICAL)
-    runs = github.repo('GET', '/actions/workflows/core-damage-controller.yml/runs?per_page=100')['workflow_runs']
-    if any(r['status'] != 'completed' and str(r['id']) != str(workflow_run_id) for r in runs):
-        return {'controller_redispatched': False, 'reason': 'Another controller is already queued'}
-    github.repo('POST', '/actions/workflows/core-damage-controller.yml/dispatches', {'ref': 'main'})
-    return {'controller_redispatched': True}
+    for attempt in range(3):
+        # A timed-out POST can still have reached GitHub. Reconcile before
+        # retrying, while workflow concurrency serializes any delayed duplicate.
+        runs = github.repo('GET', '/actions/workflows/core-damage-controller.yml/runs?per_page=100')['workflow_runs']
+        if any(r['status'] != 'completed' and str(r['id']) != str(workflow_run_id) for r in runs):
+            return {'controller_redispatched': False, 'reason': 'Another controller is already queued'}
+        try:
+            github.repo('POST', '/actions/workflows/core-damage-controller.yml/dispatches', {'ref': 'main'})
+            return {'controller_redispatched': True}
+        except httpx.HTTPError as exc:
+            transient = (isinstance(exc, httpx.TransportError) or
+                         isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500)
+            if not transient or attempt == 2:
+                raise
+            time.sleep(2 ** (attempt + 1))
 
 
 def main():
