@@ -236,7 +236,7 @@ def page_jobs(github, *, warnings=None):
                 workflow = (run.get('path') or '').split('@')[0]
                 is_solver = (repo['full_name'] == github.repository and
                              (not workflow or workflow == '.github/workflows/core-damage-worker.yml'))
-                jobs.extend({**job, 'campaign_solver': is_solver} for job in result["jobs"])
+                jobs.extend({**job, 'campaign_solver': is_solver, 'workflow_path': workflow} for job in result["jobs"])
     return jobs
 
 

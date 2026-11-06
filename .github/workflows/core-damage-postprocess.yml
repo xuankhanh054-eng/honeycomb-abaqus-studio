@@ -1,0 +1,112 @@
+name: Core damage · recover completed ODB only
+run-name: core-damage-postprocess · ${{ inputs.ticket }}
+on:
+  workflow_dispatch:
+    inputs:
+      campaign_id:
+        required: true
+        type: string
+      ticket:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+      processor_source_sha:
+        required: true
+        type: string
+      original_run_id:
+        required: true
+        type: string
+      artifact_run_id:
+        required: true
+        type: string
+permissions:
+  contents: write
+  actions: read
+  id-token: write
+concurrency:
+  group: core-damage-upload-${{ inputs.ticket }}
+  cancel-in-progress: false
+jobs:
+  postprocess:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 330
+    env:
+      ABAQUS_MEDIA_DRIVE_FILE_ID: ${{ vars.ABAQUS_MEDIA_DRIVE_FILE_ID }}
+      ABAQUS_LICENSE_ENDPOINT: ${{ secrets.ABAQUS_LICENSE_ENDPOINT }}
+      ABAQUS_VENDOR_PORT: ${{ secrets.ABAQUS_VENDOR_PORT }}
+      CAMPAIGN_ID: ${{ inputs.campaign_id }}
+      TICKET: ${{ inputs.ticket }}
+      ORIGINAL_RUN_ID: ${{ inputs.original_run_id }}
+      PROCESSOR_SOURCE_SHA: ${{ inputs.processor_source_sha }}
+      GITHUB_TOKEN: ${{ github.token }}
+      HONEYCOMB_ACTIONS_LOG: '1'
+    steps:
+      - run: echo "HONEYCOMB_WORKFLOW_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.processor_source_sha }}
+          path: postprocess-tools
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.3.0
+      - run: uv sync --locked --extra cloud --extra campaign
+      - name: Claim postprocessing without a new FE execution
+        run: uv run --locked --extra cloud python postprocess-tools/scripts/campaign_postprocess.py claim
+      - name: Reclaim disposable hosted runner SDKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          for directory in /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /usr/local/share/powershell /usr/local/share/chromium /opt/az /usr/lib/jvm /opt/hostedtoolcache/CodeQL; do
+            if test -d "$directory" && ! test -L "$directory"; then
+              sudo rm -rf --one-file-system -- "$directory"
+            fi
+          done
+          sudo apt-get clean
+          docker image prune --all --force
+          df -B1 / /mnt
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: core-damage-${{ inputs.ticket }}
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.artifact_run_id }}
+          path: /tmp/honeycomb-results
+      - uses: ./.github/actions/abaqus-runtime
+        with:
+          tailscale_id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          drive_credentials: ${{ secrets.HONEYCOMB_DRIVE_CREDENTIALS_JSON }}
+      - name: Release verified installation media before reading ODB
+        shell: bash
+        run: |
+          set -euo pipefail
+          mountpoint="$RUNNER_TEMP/abaqus-mount"
+          media="$RUNNER_TEMP/abaqus-media-inspection/iso/DS.SIMULIA.Suite.2020.Linux64_Softgozar.com.iso"
+          if mountpoint -q "$mountpoint"; then sudo umount "$mountpoint"; fi
+          test -f "$media"
+          rm -- "$media"
+          df -B1 / /mnt
+      - name: Verify completed solver and recover original ODB exports
+        run: uv run --locked --extra cloud python postprocess-tools/scripts/campaign_postprocess.py run
+      - uses: actions/upload-artifact@v7.0.2
+        if: failure() || cancelled()
+        with:
+          name: core-damage-${{ inputs.ticket }}
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: ignore
+          include-hidden-files: true
+          path: |
+            /tmp/honeycomb-results/**
+            !/tmp/honeycomb-results/**/credentials/**
+            !/tmp/honeycomb-results/**/session.json
+            !/tmp/honeycomb-results/**/engine-settings.json
+      - name: Retain recovery artifact identity
+        if: failure() || cancelled()
+        run: uv run --locked --extra cloud python postprocess-tools/scripts/campaign_postprocess.py failure

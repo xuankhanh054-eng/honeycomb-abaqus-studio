@@ -142,6 +142,9 @@ def reconcile_publication(manifest, row, app):
     catalog = Catalog(github)
     key = ticket_key(manifest['id'], row['publication_ticket'])
     work, _ = catalog.get(key)
+    recovery_workflow = ('core-damage-postprocess.yml' if work and work.get('publication_kind') == 'postprocess'
+                         else 'core-damage-publication.yml')
+    recovery_title = 'core-damage-postprocess · ' if recovery_workflow == 'core-damage-postprocess.yml' else 'core-damage-upload · '
     if work and work.get('outcome') in ('completed', 'checkpoint') and work.get('archive_verified'):
         updated = apply_outcome({**row, 'ticket': row['publication_ticket']}, work)
         row.clear()
@@ -159,16 +162,17 @@ def reconcile_publication(manifest, row, app):
         if run['status'] != 'completed':
             return
         if work.get('publication_attempt', 0) >= 3:
-            row.update(status='needs_investigation', error='Three upload-only attempts failed; solver output remains retained')
+            row.update(status='needs_investigation', error='Three publication recovery attempts failed; solver output remains retained')
             return
     elif work.get('publication_status') == 'ready':
         if time.time() - work['publication_dispatched_at'] < 900:
             return
-        runs = github.repo('GET', '/actions/workflows/core-damage-publication.yml/runs?event=workflow_dispatch&per_page=100')
-        if any(r.get('display_title') == 'core-damage-upload · ' + work['ticket'] and r['status'] != 'completed'
+        runs = github.repo('GET', '/actions/workflows/' + recovery_workflow + '/runs?event=workflow_dispatch&per_page=100')
+        if any(r.get('display_title') == recovery_title + work['ticket'] and r['status'] != 'completed'
                for r in runs['workflow_runs']):
             return
-    artifacts = github.repo('GET', f"/actions/runs/{work['workflow_run_id']}/artifacts?per_page=100")
+    artifact_run = work.get('postprocess_artifact_run_id') or work['workflow_run_id']
+    artifacts = github.repo('GET', f"/actions/runs/{artifact_run}/artifacts?per_page=100")
     retained = [a for a in artifacts['artifacts'] if a['name'] == row['recoverable_artifact'] and not a['expired']]
     if len(retained) != 1:
         row.update(status='needs_investigation', error='Computed output artifact unavailable; do not restart the solver for an upload error')
@@ -176,9 +180,13 @@ def reconcile_publication(manifest, row, app):
     catalog.update(key, lambda old: {**old, 'publication_status': 'ready', 'publication_workflow_run_id': None,
                    'publication_attempt': old.get('publication_attempt', 0) + 1,
                    'publication_dispatched_at': time.time(), 'fallback_artifact_id': retained[0]['id']})
-    github.repo('POST', '/actions/workflows/core-damage-publication.yml/dispatches', {
-        'ref': 'main', 'inputs': {'campaign_id': manifest['id'], 'ticket': work['ticket'],
-        'source_sha': work['source_sha'], 'original_run_id': str(work['workflow_run_id'])}})
+    inputs = {'campaign_id': manifest['id'], 'ticket': work['ticket'],
+              'source_sha': work['source_sha'], 'original_run_id': str(work['workflow_run_id'])}
+    workflow = 'core-damage-publication.yml'
+    if work.get('publication_kind') == 'postprocess':
+        workflow = 'core-damage-postprocess.yml'
+        inputs.update(processor_source_sha=work['postprocess_source_sha'], artifact_run_id=str(artifact_run))
+    github.repo('POST', '/actions/workflows/' + workflow + '/dispatches', {'ref': 'main', 'inputs': inputs})
 
 
 def status_report(manifest):
@@ -244,7 +252,15 @@ def fill_owner_slots(store, app, manifest, rows, capacity, owner):
     reserved = sum(r['owner'] == owner and r['status'] == 'dispatching' and not r.get('workflow_run_id')
                    for r in manifest['designs'] + manifest['pilot_designs'])
     warnings = []
-    slots = available_slots(owner_budget, page_jobs(github, warnings=warnings), reserved)
+    owner_jobs = page_jobs(github, warnings=warnings)
+    if owner == CANONICAL.split('/')[0]:
+        # The current controller's job can be absent briefly from Actions' API.
+        # Keep one slot across relays even in that observation gap. Concurrency
+        # already serializes controllers, so count that reservation exactly once.
+        owner_jobs = [job for job in owner_jobs
+                      if job.get('workflow_path') != '.github/workflows/core-damage-controller.yml']
+        reserved += 1
+    slots = available_slots(owner_budget, owner_jobs, reserved)
     pending = [r for r in rows if r['owner'] == owner
                and r['status'] in ('pending', 'checkpoint', 'solver_retry', 'preparation_retry')
                and admission(manifest, r)]
