@@ -42,6 +42,12 @@ def main():
     reports = []
     with native_runtime(root, continuation=True) as executable:
         for case in CASES:
+            write_json(Path('output/core-end-bond-progress.json'), {
+                'current_id': case, 'completed': reports,
+                'workflow_run_id': int(os.environ['GITHUB_RUN_ID']),
+                'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+            })
+            print('NATIVE_END_BOND starting ' + case, flush=True)
             original = ModelSpec.model_validate(rows[case]['model'])
             model = ModelSpec.model_validate({**original.model_dump(), 'duration': .00003,
                                               'field_intervals': 2, 'history_intervals': 30})
@@ -77,6 +83,7 @@ def main():
             reports.append({'id': case, 'physical_inputs_hash': rows[case]['physical_inputs_hash'],
                             'passed': True, 'solver_completed': True, 'selection': selected,
                             'core_mass_kg': actual['core_mass_kg'], 'mass_preserved': True})
+            print('NATIVE_END_BOND completed ' + case, flush=True)
             write_json(Path('output/core-end-bond-progress.json'), {'completed': reports})
             store.db.close()
     runtime, errors = execution_runtime()
@@ -86,6 +93,8 @@ def main():
               'base_source_sha': BASE, 'runtime_hash': digest(runtime),
               'workflow_run_id': int(os.environ['GITHUB_RUN_ID']), 'cases': reports,
               'diagnostic_duration_s': .00003, 'unchanged_native_components': components,
+              'operational_changes': {'remote_reporting_interval_s': 300,
+                                      'deadline_monitor': 'independent_local_watchdog'},
               'scope': 'core bonding construction; unchanged material, solver and restart components inherit base evidence'}
     write_json(Path('output/core-end-bond-verification.json'), report)
     Catalog(Github(token=os.environ['GITHUB_TOKEN'])).update('campaign-geometry-patch/latest', lambda _old: report)

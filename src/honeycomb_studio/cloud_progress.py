@@ -1,4 +1,4 @@
-"""Bounded remote progress: checks each minute, catalog only at phase transitions."""
+"""Local progress each minute; remote reports share the repository API budget."""
 
 import threading
 import time
@@ -21,21 +21,25 @@ class Progress:
         self.store, self.batch_id, self.deadline = store, batch_id, deadline
         self.done = threading.Event()
         self.check = None
+        self.sha = None
+        self.final_status = None
         self.stop_reason = None
         self.thread = threading.Thread(target=self.loop, daemon=True)
+        self.watchdog = threading.Thread(target=self.check_deadline, daemon=True)
 
     def start(self, sha):
-        self.check = self.github.repo(
-            "POST",
-            "/check-runs",
-            {
-                "name": "Honeycomb solver",
-                "head_sha": sha,
-                "status": "in_progress",
-                "external_id": self.identity,
-            },
-        )["id"]
+        self.sha = sha
+        # A throttled status request must never delay the actual FE process.
+        self.watchdog.start()
         self.thread.start()
+
+    def check_deadline(self):
+        while not self.done.is_set():
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                self.stop_solver("timed_out")
+                return
+            self.done.wait(min(5, remaining))
 
     def stop_solver(self, reason="cancelled"):
         self.stop_reason = self.stop_reason or reason
@@ -45,6 +49,7 @@ class Progress:
 
     def loop(self):
         previous = None
+        next_remote = 0.
         while not self.done.is_set():
             # A GitHub outage must not disable the local solver deadline.
             if time.monotonic() >= self.deadline:
@@ -57,10 +62,21 @@ class Progress:
                     logger.resources()
             except Exception:
                 runs = []
+            if time.monotonic() < next_remote:
+                self.done.wait(60)
+                continue
+            # Twenty workers consume about 480 ordinary status requests/hour,
+            # leaving room within GITHUB_TOKEN's 1000/repository hourly limit.
+            next_remote = time.monotonic() + 300
             try:
                 job, _ = self.catalog.get("jobs/" + self.identity)
                 if (job or {}).get("cancel_requested"):
                     self.stop_solver()
+                if self.check is None and self.sha:
+                    self.check = self.github.repo("POST", "/check-runs", {
+                        "name": "Honeycomb solver", "head_sha": self.sha,
+                        "status": "in_progress", "external_id": self.identity,
+                    })["id"]
                 active = [r for r in runs if r["status"] not in ("completed", "review", "failed", "queued")]
                 phase = ", ".join(sorted({r["status"] for r in active})) if active else "waiting"
                 if phase != previous:
@@ -81,10 +97,16 @@ class Progress:
                 # A lost status update must not kill the actual solver or publish invented progress.
                 pass
             self.done.wait(60)
+        if self.final_status is not None:
+            self.finish_check(self.final_status)
 
     def finish(self, status):
+        self.final_status = status
         self.done.set()
-        self.thread.join(timeout=35)
+        # Final check publication also runs in the reporter, so archival can
+        # proceed while GitHub is throttling optional progress traffic.
+        self.thread.join(timeout=1)
+        self.watchdog.join(timeout=1)
         try:
             logger = get_actions_log()
             if logger:
@@ -96,6 +118,8 @@ class Progress:
                         logger.failure(run["error"], run["id"], "artifact: logs của attempt và manifest trên Releases")
         except Exception:
             pass  # Reporting must preserve finalization even if the store is unavailable.
+
+    def finish_check(self, status):
         if self.check:
             try:
                 self.github.repo(
