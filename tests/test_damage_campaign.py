@@ -64,6 +64,23 @@ def test_reference_contract_units_and_identity():
     assert before['physics_hash'] != mesh['physics_hash']
 
 
+def test_export_records_resolved_energy_and_actual_worker_source(tmp_path):
+    import csv
+
+    from honeycomb_studio.campaign_export import export_campaign
+
+    manifest = campaign_manifest()
+    manifest['source_sha'] = 'a' * 40
+    row = manifest['designs'][0]
+    row['source_sha'] = 'b' * 40
+    manifest.update(designs=[row], pilot_designs=[])
+    export_campaign(manifest, tmp_path)
+    with (tmp_path / 'samples.csv').open(encoding='utf-8-sig', newline='') as stream:
+        actual = list(csv.DictReader(stream))[0]
+    assert float(actual['input.energy_J']) == pytest.approx(84.8)
+    assert actual['source_sha'] == row['source_sha']
+
+
 def test_manifest_reproducible_valid_partition_and_fail_closed():
     campaign = campaign_manifest()
     assert campaign == campaign_manifest()

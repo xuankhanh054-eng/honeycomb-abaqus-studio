@@ -207,9 +207,11 @@ class Dispatcher:
 
         shard = self.store.update_design(manifest["id"], row["owner"], row["id"], reserve)
         current = next(r for r in shard["designs"] if r["id"] == row["id"])
+        worker_source = (current['predecessor']['source_sha'] if current.get('segment', 0)
+                         else manifest['source_sha'])
         github = self.app.repository(row["repository"])
         work = {"campaign_id": manifest["id"], "ticket": ticket, "design": current,
-                "repository": row["repository"], "source_sha": manifest["source_sha"],
+                "repository": row["repository"], "source_sha": worker_source,
                 "runtime_hash": manifest["runtime_hash"], "protocol_hash": manifest.get("protocol_hash"),
                 "segment": current.get("segment", 0), "attempt": current.get("attempt", 0),
                 "predecessor": current.get("predecessor"), "status": "ready"}
@@ -217,7 +219,7 @@ class Dispatcher:
         # A lost response is left reserved. Reconciliation reuses this ticket; never invent a new solver.
         github.repo("POST", "/actions/workflows/core-damage-worker.yml/dispatches",
                     {"ref": "main", "inputs": {"campaign_id": manifest["id"], "ticket": ticket,
-                                               "source_sha": manifest["source_sha"]}})
+                                               "source_sha": worker_source}})
         return ticket
 
 
@@ -226,6 +228,8 @@ def apply_outcome(row, result):
     if result.get("ticket") != row.get("ticket") or result.get("design", {}).get("physics_hash") != row["physics_hash"]:
         raise ValueError("Outcome does not belong to the reserved design")
     value = deepcopy(row)
+    if result.get('source_sha'):
+        value['source_sha'] = result['source_sha']
     outcome = result.get("outcome")
     if outcome in ("completed", "checkpoint") and not result.get("archive_verified"):
         raise ValueError("Unverified output cannot release a solver slot")
@@ -260,7 +264,7 @@ def apply_outcome(row, result):
     else:
         return value
     value.setdefault("execution_history", []).append({k: result.get(k) for k in
-        ("ticket", "workflow_run_id", "outcome", "segment", "attempt", "error", 'execution_wall_seconds',
+        ("ticket", "workflow_run_id", "outcome", "segment", "attempt", "error", 'source_sha', 'execution_wall_seconds',
          'solver_started_at', 'solver_finished_at')})
     value["ticket"] = None
     return value

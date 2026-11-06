@@ -2,7 +2,7 @@
 
 Ngày lập: 06/11/2026, múi giờ Asia/Bangkok.
 
-Cập nhật theo lệnh thực thi: **60 OFAT**, gồm 15 mức/biến không trùng tham chiếu; **259 LHS phát triển**. Đã được phép triển khai toàn bộ khi lần lượt đạt các cổng kiểm chứng. Tại thời điểm chuẩn bị, controller vẫn khóa do phép thử checkpoint/recover chưa đạt; việc cho phép thực thi không thay thế bằng chứng kiểm chứng.
+Cập nhật theo lệnh thực thi: **60 OFAT**, gồm 15 mức/biến không trùng tham chiếu; **259 LHS phát triển**. Đã được phép triển khai toàn bộ khi lần lượt đạt các cổng kiểm chứng. Qualification phục hồi và hạ tầng tám tài khoản đã đạt trên source `ca9ee5448fb312c7d7ed9fac5b4eefde757697b8`; controller đã mở ở pha pilot. Bộ 400 mẫu còn chờ các cổng hội tụ và độ nhạy.
 
 ## 1. Phạm vi và đầu ra
 
@@ -200,6 +200,11 @@ Kiểm thử phần mềm tại commit `ec09e28c`: 336 passed, 1 skipped trên W
 - [Run 42244271427](https://github.com/xuankhanh24/honeycomb-abaqus-studio/actions/runs/42244271427): TLS, đổi thời điểm yêu cầu dừng và XPLB_EXIT đều vẫn lỗi bộ nhớ ở 4 luồng; XPLB_EXIT/1 CPU không có dấu crash. Workflow chẩn đoán xanh chỉ xác nhận đã thu log, không chứng nhận cơ chế dừng đạt.
 - [Run 42246374349](https://github.com/xuankhanh24/honeycomb-abaqus-studio/actions/runs/42246374349): đang kiểm tra MPI cục bộ/4 tiến trình, yêu cầu dừng chỉ từ luồng chính và parallel=loop. Chưa có kết quả tại thời điểm ghi.
 
-Chiến dịch H20 vẫn tắt, ba pilot và 400 cấu hình ban đầu chưa được gửi. Chưa có bằng chứng phá hủy panel H20 hợp lệ. Phải xác minh dừng sạch, lịch sử không mất và trạng thái hư hỏng được phục hồi trên runner khác trước khi mở pilot.
+- Run 42247330558: hai biến thể kết thúc bước hết thời gian chờ; bị loại.
+- Run 42250805080: XPLB_EXIT từ luồng chính dừng sạch nhưng mất lịch sử gốc; bị loại. Bộ đọc ODB đã được sửa để kiểm tra danh sách khóa khi trường không tồn tại.
+- [Run 42253210205](https://github.com/xuankhanh24/honeycomb-abaqus-studio/actions/runs/42253210205): **đạt**, source `ca9ee5448fb312c7d7ed9fac5b4eefde757697b8`. MPI/DOMAIN/4, double=both; phục hồi đàn hồi giữ nguyên 11 kênh lịch sử. Mẫu shell đang mềm hóa có PEEQ≈0,424, SDEG≈0,402, JCCRT=1, TEMP≈79,24 °C, STATUS=1 và vận tốc khác 0 tại checkpoint. Runner thứ hai giữ nguyên trạng thái, chạy tới xóa phần tử và đủ 60 ms, 19 kênh lịch sử liên tục.
+- Cả bảy repo phụ đã đạt kiểm tra hạ tầng đúng source; repo chính đạt qua workflow trên. Runtime hash MPI: `f43a4a1f6e58128e11b0ef13e1494ccb7825687f9b58111abf3f8cbf751f92b2`.
+
+Đã có xóa phần tử trong các bài thử vật liệu kéo/nén/cắt. Chưa có bằng chứng phá hủy panel H20 hợp lệ tại thời điểm mở pilot. Tham số phá hủy vẫn chưa được hiệu chuẩn thực nghiệm. Campaign `core-damage-v2-20261107` đã đặt `execution_scope=full`, `enabled=true`, pha `pilot`; các cổng thời gian, lưới, độ nhạy và audit 40 vẫn khóa dữ liệu chính. [Lượt controller mở pilot](https://github.com/xuankhanh24/honeycomb-abaqus-studio/actions/runs/42256510146).
 
 **Tóm tắt:** kiểm chứng → 3 pilot → hội tụ/độ nhạy → 40 mẫu trong bộ 400 → 360 mẫu còn lại → tối đa 80 bổ sung → kiểm tra độc lập → 20 FE xác nhận → dữ liệu và báo cáo tập trung.

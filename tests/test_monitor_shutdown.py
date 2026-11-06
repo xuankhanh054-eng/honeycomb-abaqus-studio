@@ -75,6 +75,9 @@ def test_checkpoint_stop_uses_solver_callback_and_clears_predecessor_markers(
     calls = []
     def launch(*args):
         calls.append(args[1])
+        source = Path(next(value.removeprefix('user=') for value in args[1] if value.startswith('user=')))
+        # Abaqus 2020 replaces every '.c', including one inside '.continuation'.
+        assert source.name.replace('.c', '.o') == source.with_suffix('.o').name
         assert not (raw / 'continuation.stop').exists()
         assert not (raw / 'continuation-stop-ack.json').exists()
         Path(args[3]).write_text(solver_log)
@@ -88,7 +91,7 @@ def test_checkpoint_stop_uses_solver_callback_and_clears_predecessor_markers(
     monkeypatch.setattr(engine.shutdown, 'wait', lambda _: None)
     with pytest.raises(expected):
         engine._monitor(run, attempt, 'solving', ['job=fixture'])
-    assert len(calls) == 1 and calls[0] == ['job=fixture', 'user=' + str(raw / 'fixture.continuation.c')]
+    assert len(calls) == 1 and calls[0] == ['job=fixture', 'user=' + str(raw / 'fixture_continuation.c')]
     assert (raw / 'continuation.stop').exists()
-    assert (raw / 'fixture.continuation.c').read_bytes() == control.read_bytes()
+    assert (raw / 'fixture_continuation.c').read_bytes() == control.read_bytes()
     store.db.close()

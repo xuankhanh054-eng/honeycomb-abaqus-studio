@@ -1,29 +1,31 @@
 {
   "passed": true,
+  "cross_runner": true,
+  "damage_state_verified": true,
   "before": {
     "solver_success": false,
     "solver_error": true,
-    "increment": 310185,
-    "simulation_time_s": 0.02005,
-    "total_time_s": 0.02005,
-    "cpu_time": "00:00:25",
+    "increment": 100097,
+    "simulation_time_s": 0.01008,
+    "total_time_s": 0.01008,
+    "cpu_time": "00:00:14",
     "stable_increment_s": 1e-14,
-    "critical_element": 7,
-    "kinetic_energy_Nmm": 0.0,
-    "total_energy_Nmm": 0.0,
-    "solver_percent": 33.416666666666664
+    "critical_element": 4,
+    "kinetic_energy_Nmm": 2.234e-10,
+    "total_energy_Nmm": 0.0003656,
+    "solver_percent": 16.8
   },
   "after": {
     "solver_success": true,
     "solver_error": false,
-    "increment": 928293,
+    "increment": 430899,
     "simulation_time_s": 0.06,
     "total_time_s": 0.06,
-    "cpu_time": "00:00:52",
-    "stable_increment_s": 6.463e-08,
-    "critical_element": 8,
-    "kinetic_energy_Nmm": 0.0,
-    "total_energy_Nmm": 0.0,
+    "cpu_time": "00:00:44",
+    "stable_increment_s": 3e-05,
+    "critical_element": 0,
+    "kinetic_energy_Nmm": 3.169e-15,
+    "total_energy_Nmm": 0.000382,
     "solver_percent": 100.0
   },
   "files": [
@@ -44,29 +46,90 @@
   "physics_changed": false,
   "history_integrity": {
     "passed": true,
-    "channels": 11,
+    "channels": 19,
     "expected_interval_s": 5.9999999999999995e-05,
     "maximum_allowed_gap_s": 8.999999999999999e-05,
     "issues": []
   },
   "stop": {
-    "simulation_time_s": 0.020048606096847672,
-    "increment": 310185
+    "simulation_time_s": 0.010083336763196888,
+    "increment": 100096
   },
-  "source_sha256": "b969448606d7a1f9242a7f2ef421e0bfcf6db9b1eeade5c418780a4efdebd858",
-  "source_commit": "759ba0a066d269bec049ba6bf06458f3070958f6",
-  "workflow_run_id": 42107005432,
-  "url": "https://github.com/xuankhanh24/honeycomb-abaqus-studio/actions/runs/42107005432",
+  "source_sha256": "97f83875f872de2009f546e129aa62844aba1324f55b2e325e2bc59a5730d22f",
+  "source_commit": "ca9ee5448fb312c7d7ed9fac5b4eefde757697b8",
+  "workflow_run_id": 42253210205,
+  "url": "https://github.com/xuankhanh24/honeycomb-abaqus-studio/actions/runs/42253210205",
+  "runtime_hash": "f43a4a1f6e58128e11b0ef13e1494ccb7825687f9b58111abf3f8cbf751f92b2",
   "checkpoint_history_integrity": {
     "passed": true,
-    "channels": 11,
-    "expected_interval_s": 5.9999999999999995e-05,
-    "maximum_allowed_gap_s": 8.999999999999999e-05,
+    "channels": 19,
+    "expected_interval_s": 6e-05,
+    "maximum_allowed_gap_s": 9e-05,
     "issues": []
   },
-  "scope": "Native small-model stop/recover acceptance; research configurations retain independent quality gates.",
+  "elastic_verification": {
+    "passed": true,
+    "cross_runner": false,
+    "damage_state_verified": false,
+    "before": {
+      "solver_success": false,
+      "solver_error": true,
+      "increment": 311297,
+      "simulation_time_s": 0.02012,
+      "total_time_s": 0.02012,
+      "cpu_time": "00:00:28",
+      "stable_increment_s": 1e-14,
+      "critical_element": 6,
+      "kinetic_energy_Nmm": 0.0,
+      "total_energy_Nmm": 0.0,
+      "solver_percent": 33.53333333333333
+    },
+    "after": {
+      "solver_success": true,
+      "solver_error": false,
+      "increment": 928293,
+      "simulation_time_s": 0.06,
+      "total_time_s": 0.06,
+      "cpu_time": "00:00:56",
+      "stable_increment_s": 6.463e-08,
+      "critical_element": 6,
+      "kinetic_energy_Nmm": 0.0,
+      "total_energy_Nmm": 0.0,
+      "solver_percent": 100.0
+    },
+    "files": [
+      "recover_probe.abq",
+      "recover_probe.com",
+      "recover_probe.dat",
+      "recover_probe.inp",
+      "recover_probe.mdl",
+      "recover_probe.msg",
+      "recover_probe.odb",
+      "recover_probe.pac",
+      "recover_probe.prt",
+      "recover_probe.res",
+      "recover_probe.sel",
+      "recover_probe.sta",
+      "recover_probe.stt"
+    ],
+    "physics_changed": false,
+    "history_integrity": {
+      "passed": true,
+      "channels": 11,
+      "expected_interval_s": 5.9999999999999995e-05,
+      "maximum_allowed_gap_s": 8.999999999999999e-05,
+      "issues": []
+    },
+    "stop": {
+      "simulation_time_s": 0.02012041551125087,
+      "increment": 311296
+    }
+  },
+  "scope": "Native small-model qualification with progressive damage, thermal state and cross-runner recovery; H20 panel retains independent gates.",
   "duration_s": 0.06,
   "history_intervals": 1000,
   "cpus": 4,
-  "precision": "double=both"
+  "precision": "double=both",
+  "parallel_mode": "MPI",
+  "physical_calibration": false
 }

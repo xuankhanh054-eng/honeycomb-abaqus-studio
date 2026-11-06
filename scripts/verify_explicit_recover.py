@@ -61,7 +61,8 @@ def main():
         if args.damage:
             from honeycomb_studio.campaign_coupons import write_recovery_coupon
             write_recovery_coupon(ROOT)
-    control = ROOT / 'continuation_control.c'
+    # Exercise the same filename pattern as Engine, including native linking.
+    control = ROOT / 'recover_probe_continuation.c'
     shutil.copy2('scripts/linux_media/continuation_control.c', control)
     reader = ROOT / 'read_history.py'
     reader.write_text('''from odbAccess import openOdb

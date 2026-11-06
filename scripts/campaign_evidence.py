@@ -3,13 +3,15 @@ import argparse
 import json
 import os
 import subprocess
-import tarfile
 import tempfile
 from pathlib import Path
 
+from continuation_bundle import pack
+from continuation_bundle import restore as restore_bundle
+
 from honeycomb_studio.cloud_archive import ReleaseArchive
 from honeycomb_studio.cloud_github import Catalog, Github
-from honeycomb_studio.cloud_restore import destination, restore
+from honeycomb_studio.cloud_restore import restore
 from honeycomb_studio.cloud_runtime import execution_runtime
 from honeycomb_studio.models import digest
 from honeycomb_studio.store import write_json
@@ -32,12 +34,7 @@ def publish_checkpoint(github, catalog, evidence):
         raise ValueError('Material checks failed')
     with tempfile.TemporaryDirectory(prefix='validation-publication-') as temp:
         directory = Path(temp)
-        with tarfile.open(directory / 'state.tar', 'w') as bundle:
-            for path in sorted(PROBE.rglob('*')):
-                if path.is_symlink():
-                    raise ValueError('Symlink in qualification checkpoint')
-                if path.is_file():
-                    bundle.add(path, arcname=path.relative_to(PROBE).as_posix(), recursive=False)
+        pack(directory, 'checkpoint', root=PROBE)
         write_json(directory / 'material.json', material)
         tag = f"core-damage-validation-{evidence['workflow_run_id']}-{evidence['workflow_run_attempt']}"
         release = github.repo('POST', '/releases', {'tag_name': tag, 'target_commitish': evidence['source_sha'],
@@ -58,13 +55,7 @@ def restore_checkpoint(catalog, evidence):
     with tempfile.TemporaryDirectory(prefix='validation-download-') as temp:
         directory = Path(temp)
         verification = restore(pending['archive'], directory, allow_incomplete=True)
-        with tarfile.open(directory / 'state.tar') as bundle:
-            for member in bundle.getmembers():
-                if not member.isfile():
-                    raise ValueError('Non-file qualification checkpoint member')
-                destination(PROBE.resolve(), member.name)
-            PROBE.mkdir()
-            bundle.extractall(PROBE, filter='data')
+        restore_bundle(directory, 1, root=PROBE)
     write_json(Path('output/campaign-archive-restore.json'), {'passed': True, 'verification': verification,
                'archive_hash': pending['archive_hash'], 'cross_runner': True})
 

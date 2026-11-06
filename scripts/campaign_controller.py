@@ -89,7 +89,7 @@ def reconcile(store, manifest, app):
                 # Re-dispatch the SAME ticket. The CAS claim rejects duplicate workers even after uncertain responses.
                 github.repo('POST', '/actions/workflows/core-damage-worker.yml/dispatches',
                     {'ref': 'main', 'inputs': {'campaign_id': manifest['id'], 'ticket': row['ticket'],
-                                               'source_sha': manifest['source_sha']}})
+                                               'source_sha': work['source_sha']}})
                 row['dispatch_started_at'] = time.time()
     return manifest
 
@@ -135,7 +135,7 @@ def reconcile_publication(manifest, row, app):
                    'publication_dispatched_at': time.time(), 'fallback_artifact_id': retained[0]['id']})
     github.repo('POST', '/actions/workflows/core-damage-publication.yml/dispatches', {
         'ref': 'main', 'inputs': {'campaign_id': manifest['id'], 'ticket': work['ticket'],
-        'source_sha': manifest['source_sha'], 'original_run_id': str(work['workflow_run_id'])}})
+        'source_sha': work['source_sha'], 'original_run_id': str(work['workflow_run_id'])}})
 
 
 def status_report(manifest):

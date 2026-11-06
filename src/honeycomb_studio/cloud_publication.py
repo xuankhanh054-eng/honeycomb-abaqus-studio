@@ -7,12 +7,20 @@ from pathlib import Path
 
 def prepare(source: Path, target: Path):
     # Lazy import avoids a cycle when ReleaseArchive prepares its own publication view.
-    from .cloud_archive import ALLOWED
+    from .cloud_archive import ALLOWED, checkpoint_paths
 
+    native_paths = checkpoint_paths(source)
     has_reductions = any(source.glob("**/reduced-fields/*.json")) or any(source.glob("**/remote-fields/*.json"))
     reductions = []
     for path in sorted(source.rglob("*")):
         relative = path.relative_to(source)
+        if relative.as_posix() in native_paths:
+            if path.is_symlink() or not path.is_file():
+                raise ValueError('Invalid native checkpoint file')
+            destination = target / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.link(path, destination)
+            continue
         if path.is_symlink() or not path.is_file() or path.suffix.lower() not in ALLOWED:
             continue
         if path.suffix.lower() == ".tar" and path.name not in ("field-reductions.tar", "state.tar"):

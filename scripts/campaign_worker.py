@@ -136,6 +136,9 @@ def execute(work, github, catalog, key):
     solving_end = (solving_start + attempt.get('durations', {}).get('solving', solver_finished_at - solving_start)
                    if solving_start else None)
     outcome = 'completed' if run['status'] in ('completed', 'review') else 'solver_failed'
+    resource_error = store.get('batches', batch['id']).get('resource_error')
+    if not run['attempts'] and resource_error:
+        outcome = 'prepare_failed'
     receipt = None
     if progress.stop_reason == 'timed_out' and run['status'] == 'interrupted':
         attempt = run['attempts'][-1]
@@ -155,13 +158,13 @@ def execute(work, github, catalog, key):
         write_json(marker, receipt)
         outcome = 'checkpoint'
     store.db.close()  # flush SQLite before sealing the cross-runner state
-    result = {**work, 'outcome': outcome, 'error': run.get('error'), 'finished_at': time.time(),
+    result = {**work, 'outcome': outcome, 'error': run.get('error') or resource_error, 'finished_at': time.time(),
               'solver_started_at': solving_start, 'solver_finished_at': solving_end,
               'solver_wall_seconds': solving_end - solving_start if solving_start else None,
               'execution_wall_seconds': solver_finished_at - float(os.environ['HONEYCOMB_WORKFLOW_STARTED_EPOCH'])}
-    if outcome == 'solver_failed':
+    if outcome in ('solver_failed', 'prepare_failed'):
         catalog.update(key, lambda old: {**old, **result, 'status': 'finished'})
-        raise RuntimeError('Solver failed; inspect retained diagnostics: ' + str(run.get('error')))
+        raise RuntimeError(outcome + '; inspect retained diagnostics: ' + str(result['error']))
     if outcome == 'completed':
         result.update(summary=run['summary'], quality=numerical_gate(run['summary']))
     write_json(ROOT / 'campaign-execution.json', result)

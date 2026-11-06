@@ -1,0 +1,30 @@
+name: Core damage disk capacity probe
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  disk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Measure reclaimed ephemeral runner storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          df -B1 / /mnt
+          # Fixed disposable SDK paths on the ephemeral Linux runner only.
+          # Keep Docker, system Python, Node Actions and the checked-out source.
+          for directory in /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /usr/local/share/powershell /usr/local/share/chromium /opt/az /usr/lib/jvm /opt/hostedtoolcache/CodeQL; do
+            if test -d "$directory" && ! test -L "$directory"; then
+              sudo rm -rf --one-file-system -- "$directory"
+            fi
+          done
+          sudo apt-get clean
+          docker image prune --all --force
+          df -B1 / /mnt
+      - name: Measure retained runtime and workspace tool footprint
+        run: |
+          df -B1 /
+          sudo du -sx -B1 /opt /usr/local /usr/share /usr/lib /home/runner /mnt

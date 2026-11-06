@@ -4,41 +4,84 @@ import hashlib
 import json
 import os
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 ROOT = Path('/tmp/honeycomb-results')
 
 
-def pack(folder, outcome):
+def safe_path(root, name):
+    path = Path(name)
+    if not name or PurePosixPath(name).is_absolute() or '..' in path.parts or '\\' in name or ':' in name:
+        raise ValueError('Unsafe continuation member')
+    target = root / path
+    try:
+        target.resolve().relative_to(root.resolve())
+    except ValueError:
+        raise ValueError('Unsafe continuation member') from None
+    if any(parent.is_symlink() for parent in (target, *target.parents) if parent.is_relative_to(root)):
+        raise ValueError('Unsafe continuation symlink')
+    return target
+
+
+def file_record(path):
+    with path.open('rb') as stream:
+        return {'sha256': hashlib.file_digest(stream, 'sha256').hexdigest(), 'bytes': path.stat().st_size}
+
+
+def pack(folder, outcome, *, root=None):
     if outcome not in ('completed', 'checkpoint'):
         raise ValueError('A failed solver cannot produce a continuation bundle')
     folder.mkdir(parents=True, exist_ok=True)
     receipt = {'outcome': outcome}
     if outcome == 'checkpoint':
-        archive = folder / 'state.tar'
-        with tarfile.open(archive, 'w') as tar:
-            for path in sorted(ROOT.rglob('*')):
-                if path.is_symlink():
-                    raise ValueError('Symlink in checkpoint')
-                if path.is_file():
-                    if path.name in ('publication-pending.json', 'publication-result.json'):
-                        continue
-                    tar.add(path, arcname=path.relative_to(ROOT), recursive=False)
-        with archive.open('rb') as stream:
-            receipt.update(sha256=hashlib.file_digest(stream, 'sha256').hexdigest(), bytes=archive.stat().st_size)
+        source = (root or ROOT).resolve()
+        receipt.update(format='directory-v1', files={})
+        for path in sorted(source.rglob('*')):
+            relative = path.relative_to(source)
+            if path.is_symlink():
+                raise ValueError('Symlink in checkpoint')
+            if not path.is_file() or 'credentials' in relative.parts or path.name in (
+                    'session.json', 'engine-settings.json', 'publication-pending.json', 'publication-result.json'):
+                continue
+            destination = safe_path(folder / 'state', relative.as_posix())
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            # Both directories live on the same runner filesystem. A checkpoint
+            # retains the exact bytes without duplicating a potentially 100-GB ODB.
+            os.link(path, destination)
+            receipt['files'][relative.as_posix()] = file_record(path)
     (folder / 'segment.json').write_text(json.dumps(receipt), encoding='utf-8')
 
 
-def restore(folder, segment):
+def restore(folder, segment, *, root=None):
+    root = root or ROOT
     if segment == 0:
-        if ROOT.exists() and any(ROOT.iterdir()):
+        if root.exists() and any(root.iterdir()):
             raise ValueError('Initial segment must be clean')
         return False
     receipt = json.loads((folder / 'segment.json').read_text())
     if receipt['outcome'] == 'completed':
         return True
-    if receipt['outcome'] != 'checkpoint' or ROOT.exists():
+    if receipt['outcome'] != 'checkpoint' or root.exists():
         raise ValueError('Invalid continuation outcome or nonempty destination')
+    if receipt.get('format') == 'directory-v1':
+        files = receipt.get('files')
+        if not isinstance(files, dict) or not files:
+            raise ValueError('Invalid checkpoint inventory')
+        checked = []
+        for name, record in files.items():
+            source = safe_path(folder / 'state', name)
+            destination = safe_path(root, name)
+            if source.is_symlink() or not source.is_file() or file_record(source) != record:
+                raise ValueError('Corrupt continuation file: ' + name)
+            checked.append((source, destination))
+        # Verify everything before creating a partially restored workspace.
+        root.mkdir()
+        for source, destination in checked:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.link(source, destination)
+        return False
+    if receipt.get('format') is not None:
+        raise ValueError('Unsupported checkpoint format')
     archive = folder / 'state.tar'
     with archive.open('rb') as stream:
         if hashlib.file_digest(stream, 'sha256').hexdigest() != receipt['sha256'] or archive.stat().st_size != receipt['bytes']:
@@ -48,8 +91,8 @@ def restore(folder, segment):
             path = Path(member.name)
             if not member.isfile() or path.is_absolute() or '..' in path.parts or '\\' in member.name or ':' in member.name:
                 raise ValueError('Unsafe continuation member')
-        ROOT.mkdir()
-        tar.extractall(ROOT, filter='data')
+        root.mkdir()
+        tar.extractall(root, filter='data')
     return False
 
 

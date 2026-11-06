@@ -12,8 +12,7 @@ import psutil
 
 from . import solver
 from .data import checksum, consume_spool, history_summary, manifest, quality, verify_export
-from .estimates import predict
-from .execution import execution_plan
+from .execution import disk_requirement, execution_plan
 from .models import BatchSpec, digest
 from .reports import batch_report, run_report
 from .store import Store, now, write_input_csv, write_json
@@ -197,7 +196,9 @@ class Engine:
         else:
             plan = execution_plan(batch["spec"], [r["resolved"] for r in candidates],
                                   psutil.cpu_count() or 1, psutil.virtual_memory().available / 1024**3,
-                                  shutil.disk_usage(self.store.root).free / 1e9)
+                                  shutil.disk_usage(self.store.root).free / 1e9,
+                                  linked_checkpoint=self.explicit_continuation,
+                                  retained_disk_gb=[self._retained_solver_gb(r) for r in candidates])
             slots = plan["effective_parallel_runs"]
             self.store.event(batch["id"], None, {"type": "admission", **plan})
             if not slots:
@@ -228,6 +229,14 @@ class Engine:
             self.current_run = None
         return [self.store.get("runs", r["id"]) for r in wave]
 
+    def _retained_solver_gb(self, run):
+        if not self.explicit_continuation or not run.get('explicit_recover') or not run.get('attempts'):
+            return 0.
+        attempt = run['attempts'][-1]
+        raw = Path(attempt['path']) / 'raw'
+        return sum(p.stat().st_size for p in raw.glob(attempt['job_name'] + '.*')
+                   if p.is_file() and not p.is_symlink()) / 1e9
+
     def _stopping(self, r: dict):
         b = self.store.get("batches", r["batch_id"])
         return b.get("pause_requested") and b.get("stop_immediately")
@@ -243,7 +252,8 @@ class Engine:
         process = None
         if args is not None:
             if phase == 'solving' and self.continuation_control is not None:
-                control = raw / (a['job_name'] + '.continuation.c')
+                # Abaqus 2020 replaces every '.c' when deriving object names.
+                control = raw / (a['job_name'] + '_continuation.c')
                 expected = checksum(self.continuation_control)
                 if control.exists() and checksum(control) != expected:
                     raise ValueError('Continuation callback changed; recover requires the original source')
@@ -442,7 +452,7 @@ class Engine:
                 attempt = Path(a["path"])
             else:
                 free = shutil.disk_usage(self.store.root).free / 1e9
-                required = predict(r["resolved"])["recommended_free_gb_above_reserve"]
+                required = disk_requirement(batch['spec'], r['resolved'], linked_checkpoint=self.explicit_continuation)
                 if not self.fake and free < batch["spec"]["min_free_gb"] + required:
                     b = self.store.get("batches", r["batch_id"])
                     b.update(

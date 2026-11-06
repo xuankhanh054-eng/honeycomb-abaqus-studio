@@ -112,7 +112,8 @@ def test_segment_reads_checkpoint_before_native_runtime_closes(tmp_path, monkeyp
     assert not active
 
 
-def test_campaign_reads_original_checkpoint_history_inside_native_runtime(tmp_path, monkeypatch):
+@pytest.mark.parametrize('resource_blocked', [False, True])
+def test_campaign_reads_original_checkpoint_history_inside_native_runtime(tmp_path, monkeypatch, resource_blocked):
     import sys
     import time
     sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
@@ -137,6 +138,10 @@ def test_campaign_reads_original_checkpoint_history_inside_native_runtime(tmp_pa
             self.store = store
 
         def execute_wave(self, runs, batch):
+            if resource_blocked:
+                batch.update(status='paused', resource_error='Disk fixture: insufficient space')
+                self.store.save('batches', batch)
+                return
             run = runs[0]
             folder = root / 'attempt'
             raw = folder / 'raw'
@@ -167,6 +172,11 @@ def test_campaign_reads_original_checkpoint_history_inside_native_runtime(tmp_pa
     work = dict(runtime_hash=digest({}), design=campaign_manifest()['pilot_designs'][0], segment=0,
                 ticket='a' * 32, source_sha='b' * 40)
     catalog = SimpleNamespace(update=lambda key, transform: transform(work))
+    if resource_blocked:
+        with pytest.raises(RuntimeError, match='prepare_failed.*Disk fixture'):
+            campaign_worker.execute(work, None, catalog, 'ticket')
+        assert not checked and not published and not active
+        return
     campaign_worker.execute(work, None, catalog, 'ticket')
     assert checked and not active
     assert published[0]['outcome'] == 'checkpoint'
@@ -219,6 +229,29 @@ def bundle_module():
     return mod
 
 
+def test_linked_checkpoint_admission_budgets_one_odb_and_bounded_upload_part():
+    from honeycomb_studio.campaign import one_run_spec, pilots
+    from honeycomb_studio.campaign_protocol import qualification_designs
+    from honeycomb_studio.execution import execution_plan
+    from honeycomb_studio.models import ModelSpec
+
+    design = pilots()[0]
+    spec = one_run_spec(design)
+    model = ModelSpec.model_validate(design['model']).resolved()
+    assert execution_plan(spec, [model], 4, 16, 100)['effective_parallel_runs'] == 0
+    assert execution_plan(spec, [model], 4, 16, 100, linked_checkpoint=True)['effective_parallel_runs'] == 1
+    fine = qualification_designs(8., .008, mesh_factor=.5)[0]
+    model = ModelSpec.model_validate(fine['model']).resolved()
+    assert execution_plan(spec, [model], 4, 16, 145, linked_checkpoint=True)['effective_parallel_runs'] == 1
+    assert execution_plan(spec, [model], 4, 16, 100, linked_checkpoint=True)['effective_parallel_runs'] == 0
+    assert execution_plan(spec, [model], 4, 16, 60, linked_checkpoint=True,
+                          retained_disk_gb=[85])['effective_parallel_runs'] == 1
+    assert execution_plan(spec, [model], 4, 16, 20, linked_checkpoint=True,
+                          retained_disk_gb=[85])['effective_parallel_runs'] == 0
+    spec['export_all_fields'] = True
+    assert execution_plan(spec, [model], 4, 16, 145, linked_checkpoint=True)['effective_parallel_runs'] == 0
+
+
 def test_segment_bundle_roundtrip_and_tamper(monkeypatch, tmp_path):
     mod = bundle_module()
     root = tmp_path / 'root'
@@ -233,9 +266,36 @@ def test_segment_bundle_roundtrip_and_tamper(monkeypatch, tmp_path):
     assert (root / 'state').read_bytes() == b'checkpoint'
     (root / 'state').unlink()
     root.rmdir()
-    (folder / 'state.tar').write_bytes(b'broken')
+    (folder / 'state' / 'state').write_bytes(b'broken')
     with pytest.raises(ValueError, match='Corrupt'):
         mod.restore(folder, 1)
+
+
+def test_checkpoint_directory_preserves_large_payload_without_a_second_copy(tmp_path):
+    mod = bundle_module()
+    source = tmp_path / 'source'
+    source.mkdir()
+    payload = source / 'job.abq.1'
+    payload.write_bytes(b'large native state')
+    (source / 'catalog.sqlite').write_bytes(b'catalog')
+    bundle = tmp_path / 'bundle'
+    mod.pack(bundle, 'checkpoint', root=source)
+    assert not (bundle / 'state.tar').exists()
+    assert (bundle / 'state/job.abq.1').samefile(payload)
+    restored = tmp_path / 'restored'
+    mod.restore(bundle, 1, root=restored)
+    assert (restored / 'job.abq.1').samefile(payload)
+    assert (restored / 'catalog.sqlite').read_bytes() == b'catalog'
+
+
+@pytest.mark.parametrize('name', ['../escape', '/escape', 'C:/escape', 'a\\escape'])
+def test_checkpoint_directory_rejects_unsafe_receipt_paths(tmp_path, name):
+    mod = bundle_module()
+    (tmp_path / 'segment.json').write_text(json.dumps({
+        'outcome': 'checkpoint', 'format': 'directory-v1', 'files': {name: {}}}))
+    with pytest.raises(ValueError, match='Unsafe'):
+        mod.restore(tmp_path, 1, root=tmp_path / 'restored')
+    assert not (tmp_path / 'restored').exists()
 
 
 def test_bundle_rejects_traversal(monkeypatch, tmp_path):

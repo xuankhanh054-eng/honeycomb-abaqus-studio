@@ -6,7 +6,7 @@ import hashlib
 import json
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
 
@@ -33,6 +33,30 @@ ALLOWED = {
     ".txt",
     ".tar",
 }
+
+
+def checkpoint_paths(root: Path):
+    """Only an explicit checkpoint receipt admits native files of arbitrary suffix."""
+    receipt = root / 'segment.json'
+    if not receipt.is_file():
+        return set()
+    data = json.loads(receipt.read_text(encoding='utf-8'))
+    if data.get('format') != 'directory-v1' or data.get('outcome') != 'checkpoint':
+        return set()
+    files = data.get('files')
+    if not isinstance(files, dict) or not files:
+        raise ValueError('Invalid native checkpoint inventory')
+    paths = set()
+    for name in files:
+        path = PurePosixPath(name)
+        if not name or path.is_absolute() or '..' in path.parts or '\\' in name or ':' in name:
+            raise ValueError('Unsafe native checkpoint path')
+        source = root / 'state' / name
+        if source.is_symlink() or not source.is_file():
+            raise ValueError('Missing native checkpoint file: ' + name)
+        source.resolve().relative_to((root / 'state').resolve())
+        paths.add('state/' + name)
+    return paths
 
 
 def parts(path: Path, temporary: Path, limit=MAX_PART):
@@ -208,12 +232,15 @@ class ReleaseArchive:
     def _publish(self, root: Path, *, attempt: str, complete: bool, checkpoint: str | None = None):
         files: list[dict[str, Any]] = []
         root = root.resolve()
+        native_paths = checkpoint_paths(root)
+        native_records = (json.loads((root / 'segment.json').read_text())['files'] if native_paths else {})
         with tempfile.TemporaryDirectory(prefix="honeycomb-upload-") as temp:
             for path in sorted(root.rglob("*")):
                 relative = path.relative_to(root)
-                if path.is_symlink() or not path.is_file() or path.suffix.lower() not in ALLOWED:
+                native = relative.as_posix() in native_paths
+                if path.is_symlink() or not path.is_file() or (path.suffix.lower() not in ALLOWED and not native):
                     continue
-                if any(
+                if not native and any(
                     p in ("cache", "spool", "credentials", "backup-manifests", ".git") for p in relative.parts
                 ):
                     continue
@@ -236,7 +263,13 @@ class ReleaseArchive:
                 after = path.stat()
                 if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
                     raise ValueError("Source changed during archival; no complete manifest will be published")
+                if native:
+                    expected = native_records[relative.as_posix().removeprefix('state/')]
+                    if any(record[key] != expected.get(key) for key in ('bytes', 'sha256')):
+                        raise ValueError('Native checkpoint changed after sealing')
                 files.append(record)
+            if native_paths - {record['path'] for record in files}:
+                raise ValueError('Native checkpoint publication is incomplete')
             streamed = root / "stream-index.json"
             if streamed.exists():
                 from .cloud_restore import validate_manifest

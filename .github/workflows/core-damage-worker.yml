@@ -55,6 +55,9 @@ jobs:
               sudo rm -rf --one-file-system -- "$directory"
             fi
           done
+          if test -f scripts/reclaim_runner_disk.py; then
+            uv run --locked python scripts/reclaim_runner_disk.py
+          fi
           sudo apt-get clean
           docker image prune --all --force
           df -B1 / /mnt
@@ -71,7 +74,14 @@ jobs:
           work, _ = Catalog(Github(token=os.environ['GITHUB_TOKEN'])).get(
               ticket_key(os.environ['CAMPAIGN_ID'], os.environ['TICKET']))
           spec = one_run_spec(work['design'])
-          required = predict(ModelSpec.model_validate(work['design']['model']).resolved())['recommended_free_gb_above_reserve'] + spec['min_free_gb']
+          model = ModelSpec.model_validate(work['design']['model']).resolved()
+          try:
+              from honeycomb_studio.execution import disk_requirement
+          except ImportError:
+              required = predict(model)['recommended_free_gb_above_reserve']
+          else:
+              required = disk_requirement(spec, model, linked_checkpoint=True)
+          required += spec['min_free_gb']
           available = shutil.disk_usage('/tmp').free / 1e9
           print(json.dumps({'design_id': work['design']['id'], 'available_GB': available,
                             'required_GB_above_installed_runtime': required,

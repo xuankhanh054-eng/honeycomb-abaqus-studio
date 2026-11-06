@@ -32,12 +32,12 @@ def export_campaign(manifest, directory: Path):
         item = {'campaign_id': manifest['id'], 'design_id': row['id'], 'sample_group': row['role'],
                 'varied_parameters': ','.join(row['varied_parameters']), 'repository': row['repository'],
                 'physics_hash': row['physics_hash'], 'physical_inputs_hash': row['physical_inputs_hash'],
-                'numerical_inputs_hash': row['numerical_inputs_hash'], 'source_sha': manifest['source_sha'],
+                'numerical_inputs_hash': row['numerical_inputs_hash'], 'source_sha': row.get('source_sha', manifest['source_sha']),
                 'protocol_hash': manifest.get('protocol_hash'), 'runtime_hash': manifest.get('runtime_hash'),
                 'status': row['status'], 'numerical_passed': numerical, 'ml_development_eligible': training,
                 'archive_verified': row.get('archive_verified', False), 'attempt': row.get('attempt', 0),
                 'segment': row.get('segment', 0), 'solver_error': row.get('error')}
-        item.update(flatten(row['model'], 'input.'))
+        item.update(flatten(ModelSpec.model_validate(row['model']).resolved(), 'input.'))
         item['input.reentrant_indent'] = ModelSpec.model_validate(row['model']).effective_indent()
         item.update(flatten(summary, 'output.'))
         rows.append(item)

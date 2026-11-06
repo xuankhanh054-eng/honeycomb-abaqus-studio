@@ -100,6 +100,28 @@ def test_checkpoint_resume_keeps_model_identity():
     assert after['segment'] == 1 and after['model'] == before and after['status'] == 'checkpoint'
 
 
+def test_result_keeps_actual_source_and_continuation_dispatch_uses_predecessor(monkeypatch):
+    from types import SimpleNamespace
+
+    from honeycomb_studio.campaign_queue import Dispatcher
+    row = {**campaign_manifest()['pilot_designs'][0], 'ticket': 'a' * 32}
+    source = 'b' * 40
+    result = dict(ticket=row['ticket'], design=row, source_sha=source, outcome='checkpoint', segment=0,
+                  archive_verified=True, receipt={'physics_hash': row['physics_hash'], 'source_sha': source}, archive={})
+    after = apply_outcome(row, result)
+    assert after['source_sha'] == after['execution_history'][-1]['source_sha'] == source
+    calls, tickets = [], []
+    github = SimpleNamespace(repo=lambda *args: calls.append(args))
+    store = SimpleNamespace(update_design=lambda _id, _owner, _row, transform: {'designs': [transform(after)]})
+    monkeypatch.setattr('honeycomb_studio.campaign_queue.admission', lambda *args: True)
+    monkeypatch.setattr('honeycomb_studio.campaign_queue.Catalog', lambda _: SimpleNamespace(
+        update=lambda _key, transform: tickets.append(transform(None))))
+    Dispatcher(store, SimpleNamespace(repository=lambda _: github)).reserve({'id': 'core-damage-v2-20261107', 'source_sha': 'c' * 40,
+                                                                           'runtime_hash': 'd' * 64}, after)
+    assert tickets[0]['source_sha'] == source
+    assert calls[0][2]['inputs']['source_sha'] == source
+
+
 def test_capacity_ramp_accepts_a_license_ceiling_between_planned_stages():
     manifest = {'capacity_stage': 80, 'license_capacity': 128, 'pilot_designs': [],
                 'designs': [dict(archive_verified=True, quality={'passed': True},

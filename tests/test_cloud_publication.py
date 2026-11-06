@@ -127,3 +127,44 @@ def test_starter_that_completed_before_cleanup_is_verified_and_preserved(tmp_pat
     uploaded["digest"] = "sha256:" + "0" * 64
     with pytest.raises(ValueError, match="digest"):
         ReleaseArchive(github, 1).upload(path, "result.part")
+
+
+@pytest.mark.parametrize('tamper', [False, True])
+def test_native_checkpoint_publication_restores_every_inventory_file(tmp_path, monkeypatch, tamper):
+    import importlib.util
+    from pathlib import Path
+
+    from honeycomb_studio.cloud_restore import restore
+
+    spec = importlib.util.spec_from_file_location('bundle', Path(__file__).parents[1] / 'scripts/continuation_bundle.py')
+    bundle = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bundle)
+    source = tmp_path / 'source'
+    source.mkdir()
+    for name in ('job.abq.1', 'job.pac', 'job.res', 'job.sel', 'catalog.sqlite', 'job.odb'):
+        (source / name).write_bytes(('native-' + name).encode())
+    sealed = tmp_path / 'sealed'
+    bundle.pack(sealed, 'checkpoint', root=source)
+    if tamper:
+        (source / 'job.abq.1').write_bytes(b'changed')
+    payloads = {}
+
+    def upload(self, path, name):
+        url = 'https://github.com/xuankhanh24/honeycomb-abaqus-studio/releases/download/test/' + name
+        payloads[url] = path.read_bytes()
+        return dict(url=url, bytes=path.stat().st_size, digest='sha256:' + hashlib.sha256(path.read_bytes()).hexdigest())
+
+    monkeypatch.setattr(ReleaseArchive, 'upload', upload)
+    publisher = ReleaseArchive(None, 1, limit=11)
+    if tamper:
+        with pytest.raises(ValueError, match='changed after sealing'):
+            publisher.publish(sealed, attempt='test', complete=False)
+        assert not any(url.endswith('artifact-manifest.json') for url in payloads)
+        return
+    manifest = publisher.publish(sealed, attempt='test', complete=False)
+    restored = tmp_path / 'downloaded'
+    with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=payloads[str(request.url)]))) as client:
+        restore(manifest, restored, client=client, allow_incomplete=True)
+    destination = tmp_path / 'resumed'
+    bundle.restore(restored, 1, root=destination)
+    assert {p.name: p.read_bytes() for p in source.iterdir()} == {p.name: p.read_bytes() for p in destination.iterdir()}
