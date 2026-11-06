@@ -5,6 +5,15 @@ on:
       source_sha:
         required: true
         type: string
+      storage_mesh_factor:
+        description: Optional short run for actual full-mesh ODB storage sizing; excluded from production data
+        required: false
+        default: ''
+        type: string
+      storage_foil:
+        required: false
+        default: '0.035'
+        type: string
 permissions:
   contents: write
   id-token: write
@@ -18,6 +27,9 @@ jobs:
       ABAQUS_LICENSE_ENDPOINT: ${{ secrets.ABAQUS_LICENSE_ENDPOINT }}
       ABAQUS_VENDOR_PORT: ${{ secrets.ABAQUS_VENDOR_PORT }}
       GITHUB_TOKEN: ${{ github.token }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      MESH_FACTOR: ${{ inputs.storage_mesh_factor }}
+      FOIL: ${{ inputs.storage_foil }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -25,13 +37,77 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@v10.3.0
       - run: uv sync --locked --extra cloud --extra campaign
+      - name: Reclaim disposable SDK storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          df -B1 / /mnt
+          # Fixed disposable SDK paths on the ephemeral Linux runner only.
+          # Keep Docker, system Python, Node Actions and the checked-out source.
+          for directory in /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /usr/local/share/powershell /usr/local/share/chromium /opt/az /usr/lib/jvm /opt/hostedtoolcache/CodeQL; do
+            if test -d "$directory" && ! test -L "$directory"; then
+              sudo rm -rf --one-file-system -- "$directory"
+            fi
+          done
+          sudo apt-get clean
+          docker image prune --all --force
+          df -B1 / /mnt
       - uses: ./.github/actions/abaqus-runtime
         with:
           tailscale_id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           audience: ${{ secrets.TS_AUDIENCE }}
           drive_credentials: ${{ secrets.HONEYCOMB_DRIVE_CREDENTIALS_JSON }}
+      - name: Release installation media
+        shell: bash
+        run: |
+          set -euo pipefail
+          mountpoint="$RUNNER_TEMP/abaqus-mount"
+          media="$RUNNER_TEMP/abaqus-media-inspection/iso/DS.SIMULIA.Suite.2020.Linux64_Softgozar.com.iso"
+          if mountpoint -q "$mountpoint"; then sudo umount "$mountpoint"; fi
+          test -f "$media"
+          rm -- "$media"
+          df -B1 / /mnt
       - run: uv run --locked --extra cloud python scripts/campaign_validate.py
       - run: uv run --locked --extra cloud python scripts/campaign_evidence.py infrastructure
+      - name: Measure real ODB storage on the optional full mesh
+        if: inputs.storage_mesh_factor != ''
+        shell: bash
+        run: |
+          uv run --locked --extra cloud --extra campaign python - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path.cwd() / 'scripts'))
+          from native_cloud_worker import native_runtime
+          from honeycomb_studio.campaign import reference_model
+          from honeycomb_studio.cloud_runtime import execution_runtime
+          from honeycomb_studio.engine import Engine
+          from honeycomb_studio.models import BatchSpec, digest
+          from honeycomb_studio.store import Store
+          root=Path('/tmp/honeycomb-storage-probe')
+          factor=float(os.environ['MESH_FACTOR'])
+          model=reference_model(foil=float(os.environ['FOIL']), duration=.00003, field_intervals=2, history_intervals=30)
+          for key in ('core_centre_seed','core_outer_seed','skin_centre_seed','skin_outer_seed','reentrant_depth_seed'):
+              setattr(model,key,getattr(model,key)*factor)
+          store=Store(root)
+          batch=store.create(BatchSpec(name='storage-probe',model=model,max_runs=1,data_profile='research',render_images=False,export_all_fields=False,backup_after_run=False))
+          runs=store.list('runs',batch['id'])
+          with native_runtime(root,continuation=True) as executable:
+              engine=Engine(store,abaqus=str(executable),fake=False)
+              engine.explicit_continuation=True
+              engine.continuation_control=Path('scripts/linux_media/continuation_control.c').resolve()
+              engine.runtime_fingerprint=digest(execution_runtime()[0])
+              engine.execute_wave(runs,batch)
+          run=store.get('runs',runs[0]['id'])
+          files=[{'path':str(p.relative_to(root)),'bytes':p.stat().st_size} for p in root.rglob('*') if p.is_file()]
+          report={'scope':'storage sizing only, excluded from the 400 configurations','source_sha':os.environ['SOURCE_SHA'],'mesh_factor':factor,'foil':model.foil,'duration_s':model.duration,'field_intervals':2,'status':run['status'],'error':run.get('error'),'summary':run.get('summary'),'files':sorted(files,key=lambda p:p['bytes'],reverse=True)[:30]}
+          Path('output').mkdir(exist_ok=True)
+          Path('output/storage-probe.json').write_text(json.dumps(report,indent=2))
+          print(json.dumps({k:v for k,v in report.items() if k not in ('summary',)},ensure_ascii=True),flush=True)
+          store.db.close()
+          if run['status'] not in ('completed','review'):
+              raise SystemExit('Storage sizing run did not produce a complete ODB; inspect artifact')
+          PY
       - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
@@ -41,3 +117,4 @@ jobs:
             output/*.json
             output/actions-logs/**
             /tmp/honeycomb-material-validation/**
+            /tmp/honeycomb-storage-probe/**
