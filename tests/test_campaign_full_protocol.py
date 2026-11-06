@@ -120,6 +120,40 @@ def test_controller_refills_a_released_slot_and_counts_its_own_actions_job(monke
     assert report['workflow_capacity'] == 160 and report['solver_license_capacity'] == 128
 
 
+def test_geometry_patch_requires_completed_native_evidence_and_matching_inputs():
+    import sys
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
+    from campaign_controller import ingest_geometry_patch
+
+    manifest = campaign_manifest()
+    rows = manifest['designs'][:8]
+    expected = 'c' * 40
+    manifest.update(source_sha='a' * 40, runtime_hash='b' * 64, pending_worker_patch_source=expected,
+                    bond_repair_design_ids=[r['id'] for r in rows])
+    rows[0].update(status='model_patch_wait', repair_waiting_for_source=expected, attempt=2)
+    report = {'passed': True, 'source_sha': expected, 'base_source_sha': 'a' * 40, 'runtime_hash': 'b' * 64,
+              'workflow_run_id': 11, 'unchanged_native_components': {str(i): 'd' * 64 for i in range(10)},
+              'cases': [{'id': r['id'], 'passed': True, 'solver_completed': True, 'mass_preserved': True,
+                         'physical_inputs_hash': r['physical_inputs_hash']} for r in rows]}
+    workflow = {'status': 'in_progress', 'conclusion': None, 'head_sha': expected,
+                'path': '.github/workflows/core-damage-bond-probe.yml'}
+    store = SimpleNamespace(catalog=SimpleNamespace(get=lambda _: (report, None),
+                            github=SimpleNamespace(repo=lambda *_: workflow)))
+    assert 'qualified_worker_patch' not in ingest_geometry_patch(store, manifest)
+    workflow.update(status='completed', conclusion='success')
+    original_hash = report['cases'][0]['physical_inputs_hash']
+    report['cases'][0]['physical_inputs_hash'] = 'e' * 64
+    assert 'qualified_worker_patch' not in ingest_geometry_patch(store, manifest)
+    report['cases'][0]['physical_inputs_hash'] = original_hash
+    result = ingest_geometry_patch(store, manifest)
+    assert result['qualified_worker_patch']['native_components_unchanged_verified']
+    assert rows[0]['status'] == 'preparation_retry' and rows[0]['attempt'] == 0
+    assert result['source_sha'] == 'a' * 40
+
+
 def test_failed_eight_ms_time_gate_does_not_allocate_sixteen_ms():
     manifest = campaign_manifest()
     manifest.update(phase='time', execution_scope='full', selected_velocity_m_s=8., trial_duration_s=.008)

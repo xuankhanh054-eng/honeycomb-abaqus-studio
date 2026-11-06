@@ -45,6 +45,36 @@ def ingest_evidence(store, manifest, app):
                 and workflow.get('path', '').split('@')[0] in (
                     '.github/workflows/core-damage-validate.yml', '.github/workflows/core-damage-infrastructure.yml')):
             manifest.setdefault('infrastructure', {})[owner] = report
+    return ingest_geometry_patch(store, manifest)
+
+
+def ingest_geometry_patch(store, manifest):
+    expected = manifest.get('pending_worker_patch_source')
+    if not expected:
+        return manifest
+    report, _ = store.catalog.get('campaign-geometry-patch/latest')
+    if (not report or report.get('passed') is not True or report.get('source_sha') != expected
+            or report.get('base_source_sha') != manifest['source_sha']
+            or report.get('runtime_hash') != manifest['runtime_hash']):
+        return manifest
+    workflow = store.catalog.github.repo('GET', '/actions/runs/' + str(report['workflow_run_id']))
+    if (workflow.get('status') != 'completed' or workflow.get('conclusion') != 'success'
+            or workflow.get('head_sha') != expected
+            or workflow.get('path', '').split('@')[0] != '.github/workflows/core-damage-bond-probe.yml'):
+        return manifest
+    rows = {r['id']: r for r in manifest['designs']}
+    cases = report.get('cases', [])
+    expected_ids = set(manifest.get('bond_repair_design_ids', []))
+    if (len(cases) != 8 or {c['id'] for c in cases} != expected_ids
+            or not all(c.get('passed') is True and c.get('solver_completed') is True
+                       and c.get('mass_preserved') is True
+                       and c.get('physical_inputs_hash') == rows[c['id']]['physical_inputs_hash'] for c in cases)
+            or len(report.get('unchanged_native_components', {})) != 10):
+        return manifest
+    manifest['qualified_worker_patch'] = {**report, 'native_components_unchanged_verified': True}
+    for row in manifest['designs']:
+        if row.get('repair_waiting_for_source') == expected and row['status'] == 'model_patch_wait':
+            row.update(status='preparation_retry', attempt=0, segment=0, predecessor=None, error=None)
     return manifest
 
 

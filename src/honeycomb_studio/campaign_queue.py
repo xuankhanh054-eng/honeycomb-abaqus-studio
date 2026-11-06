@@ -101,6 +101,9 @@ def admission(manifest, design):
     infrastructure = manifest.get("infrastructure", {}).get(design["owner"], {})
     if infrastructure.get("passed") is not True:
         return False
+    if (design.get('repair_waiting_for_source')
+            and execution_source(manifest, design) != design['repair_waiting_for_source']):
+        return False
     if design["role"] == "pilot":
         return manifest.get("gates", {}).get("material", {}).get("passed") is True
     if design["role"] in ("qualification", "material"):
@@ -162,6 +165,19 @@ def dispatch_capacity(manifest):
     """Bound Actions admission separately from FlexNet's native token queue."""
     ceiling = manifest.get('workflow_capacity', manifest.get('license_capacity', 0))
     return max(0, min(manifest.get('capacity_stage', 8), ceiling, 160))
+
+
+def execution_source(manifest, design):
+    """Keep native continuations immutable; apply only a qualified repair to new executions."""
+    if design.get('segment', 0):
+        return design['predecessor']['source_sha']
+    patch = manifest.get('qualified_worker_patch', {})
+    if (patch.get('passed') is True and patch.get('base_source_sha') == manifest.get('source_sha')
+            and patch.get('runtime_hash') == manifest.get('runtime_hash')
+            and re.fullmatch(r'[a-f0-9]{40}', patch.get('source_sha', ''))
+            and patch.get('native_components_unchanged_verified') is True):
+        return patch['source_sha']
+    return manifest['source_sha']
 
 
 def ramp_capacity(manifest):
@@ -246,13 +262,12 @@ class Dispatcher:
                     'error': None,
                     'qualification_pending_at_dispatch': parallel_collection_admission(manifest, old),
                     'protocol_hash_at_dispatch': manifest.get('protocol_hash'),
-                    'source_sha': old['predecessor']['source_sha'] if segment else manifest['source_sha'],
+                    'source_sha': execution_source(manifest, old),
                     "dispatch_started_at": time.time()}
 
         shard = self.store.update_design(manifest["id"], row["owner"], row["id"], reserve)
         current = next(r for r in shard["designs"] if r["id"] == row["id"])
-        worker_source = (current['predecessor']['source_sha'] if current.get('segment', 0)
-                         else manifest['source_sha'])
+        worker_source = current['source_sha']
         github = self.app.repository(row["repository"])
         work = {"campaign_id": manifest["id"], "ticket": ticket, "design": current,
                 "repository": row["repository"], "source_sha": worker_source,

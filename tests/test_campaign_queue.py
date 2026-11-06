@@ -9,6 +9,7 @@ from honeycomb_studio.campaign_queue import (
     available_slots,
     claim,
     dispatch_capacity,
+    execution_source,
     page_jobs,
     ramp_capacity,
 )
@@ -111,6 +112,19 @@ def test_workflow_capacity_can_fill_160_actions_slots_with_a_smaller_license_poo
     assert dispatch_capacity({'capacity_stage': 160, 'license_capacity': 128}) == 128
     assert dispatch_capacity({**manifest, 'workflow_capacity': 200}) == 160
     assert dispatch_capacity({**manifest, 'capacity_stage': 0}) == 0
+
+
+def test_qualified_geometry_repair_changes_only_new_execution_sources():
+    manifest = {'source_sha': 'a' * 40, 'runtime_hash': 'b' * 64}
+    row = {'segment': 0}
+    assert execution_source(manifest, row) == 'a' * 40
+    patch = {'source_sha': 'c' * 40, 'base_source_sha': 'a' * 40, 'runtime_hash': 'b' * 64,
+             'passed': True, 'native_components_unchanged_verified': True}
+    manifest['qualified_worker_patch'] = patch
+    assert execution_source(manifest, row) == 'c' * 40
+    assert execution_source(manifest, {'segment': 1, 'predecessor': {'source_sha': 'a' * 40}}) == 'a' * 40
+    patch['runtime_hash'] = 'd' * 64
+    assert execution_source(manifest, row) == 'a' * 40
 
 
 def test_controller_does_not_consume_the_solver_budget_but_still_uses_owner_quota():

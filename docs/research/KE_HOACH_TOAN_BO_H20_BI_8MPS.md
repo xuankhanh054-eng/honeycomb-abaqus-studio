@@ -33,6 +33,14 @@ sau 30 giây chờ, có khóa concurrency và không gửi trùng khi đã có l
 ngừng nối tiếp khi bị chặn, tắt hoặc hoàn tất. Số mẫu hoàn tất lấy từ receipt
 đã kiểm tra, không suy từ việc gửi workflow.
 
+Sửa lỗi biên hình học: bộ lọc đoạn ngắn có thể để lại nắp lõi nằm cách mặt
+liên kết dưới 0,05 mm. Với tám đầu vào đã khoanh vùng, liên kết chọn toàn bộ
+mặt nắp trong dung sai Tie sẵn có, giữ nguyên mạng vách và khối lượng hình
+học; không giảm dung sai cắt hoặc sinh phần tử rất ngắn. Bản worker sửa chỉ
+được mở sau khi tám ca đều hoàn thành phép thử Abaqus riêng và xác nhận khối
+lượng, bề mặt liên kết, cùng mã vật liệu/solver/restart không đổi. Giữ source
+thực tế cho từng kết quả; tiếp tục restart bằng đúng source của checkpoint.
+
 ## 1. Phạm vi và đầu ra
 
 Kế hoạch bao phủ kiểm chứng mô hình, pilot, **400 cấu hình ban đầu**, tối đa **80 cấu hình bổ sung**, và **20 cấu hình xác nhận tối ưu**. Tổng dữ liệu chính là **420–500 cấu hình**, chưa tính kiểm tra số và retry. Đây là kế hoạch toàn chiến dịch; việc lập tài liệu và xuất danh sách không bật bộ điều phối hoặc gửi job.
