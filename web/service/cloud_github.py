@@ -226,6 +226,16 @@ class Catalog:
         )
         if response is None:
             return None, None
+        if response.get('encoding') == 'none':
+            # Contents omits payloads above 1 MiB. Fetch the immutable blob
+            # selected by this read so compare-and-swap keeps the same revision.
+            blob = self.github.repo('GET', '/git/blobs/' + response['sha'])
+            if blob.get('sha') != response['sha'] or blob.get('encoding') != 'base64':
+                raise ValueError('Catalog blob identity or encoding differs')
+            payload = base64.b64decode(blob['content'])
+            if len(payload) != response['size']:
+                raise ValueError('Catalog blob size differs')
+            return json.loads(payload), response['sha']
         return json.loads(base64.b64decode(response["content"])), response["sha"]
 
     def write(self, key: str, value: dict, sha=None):

@@ -3,7 +3,7 @@
   "models.py": "6808b3a457b194d4f8d6a9415bde7fe7c010ad8ad49e09969c7a91afba7fd0cc",
   "execution.py": "e3a7feae043e24096cfa85ac2c99cf59e6c41d889d397e7d5ed9a11f9ca0b34d",
   "estimates.py": "91614ae0758dc9ad253b55fd25d12c046d5de8961f17389d7b92b694edf44db1",
-  "cloud_github.py": "07d1c6608103d550a017d5bbc54c97fb8a6bce04ba5d0cfbbf4f7fbe101e5f2f",
+  "cloud_github.py": "25599a2211d8ec6ce61eadf3c410ded742a26a78fc3a2171021be9334198fbe8",
   "cloud_matrix.py": "8716240c4b55926f2ea8f6b38818345957a1176a1f5a36cb7ccc6dacd633f1f5",
   "cloud_quality.py": "9f8420147a65aa8bf9d852287c56f26c689fcad0a70b94f767b53fd1399553a3",
   "cloud_api.py": "5343c78a05e00d4bf388ef1748caf19b1c0f4f9b0b70d5d3f8b3a69537f9e377",
