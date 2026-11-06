@@ -3,6 +3,7 @@ import argparse
 import json
 import math
 import os
+import subprocess
 import time
 import uuid
 from collections import Counter
@@ -10,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from honeycomb_studio.campaign import OWNERS, campaign_manifest, progress
 from honeycomb_studio.campaign_acceptance import import_evidence
+from honeycomb_studio.campaign_artifact import completed_odb_evidence
 from honeycomb_studio.campaign_export import globally_qualified
 from honeycomb_studio.campaign_protocol import advance, runnable
 from honeycomb_studio.campaign_queue import (
@@ -111,6 +113,12 @@ def reconcile_owner(store, manifest, app, owner):
                 row.update(status='needs_investigation', error='Reserved execution ticket is missing; inspect central and repository catalogs')
             continue
         if work.get('status') == 'finished':
+            if work.get('outcome') == 'solver_failed' and work.get('workflow_run_id'):
+                run = github.repo('GET', '/actions/runs/' + str(work['workflow_run_id']))
+                if run['status'] != 'completed':
+                    continue  # The original failure artifact is still being retained.
+                if route_completed_odb(manifest, row, work, github):
+                    continue
             updated = apply_outcome(row, work)
             row.clear()
             row.update(updated)
@@ -121,6 +129,8 @@ def reconcile_owner(store, manifest, app, owner):
                 row['error'] = None
             run = github.repo('GET', '/actions/runs/' + str(work['workflow_run_id']))
             if run['status'] == 'completed':
+                if route_completed_odb(manifest, row, work, github):
+                    continue
                 row.update(status='needs_investigation', error='Workflow ended without a verified solver/publication receipt',
                            workflow_conclusion=run['conclusion'])
         elif time.time() - row['dispatch_started_at'] > 900:
@@ -135,6 +145,28 @@ def reconcile_owner(store, manifest, app, owner):
                                                'source_sha': work['source_sha']}})
                 row['dispatch_started_at'] = time.time()
     return manifest
+
+
+def controller_source_sha():
+    return subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+
+
+def route_completed_odb(manifest, row, work, github):
+    try:
+        evidence = completed_odb_evidence(github, work)
+    except Exception as exc:
+        # An unavailable/ambiguous artifact must not trigger an expensive new FE run.
+        row.update(status='needs_investigation', error='Inspect retained solver artifact before retry: ' + type(exc).__name__)
+        return True
+    if not evidence:
+        return False
+    Catalog(github).update(ticket_key(manifest['id'], work['ticket']), lambda old: {
+        **old, 'publication_kind': 'postprocess', 'postprocess_source_sha': controller_source_sha(),
+        'publication_status': 'pending', 'publication_workflow_run_id': None,
+        'original_solver_evidence': evidence})
+    row.update(status='publication_pending', publication_ticket=work['ticket'], ticket=None,
+               recoverable_artifact='core-damage-' + work['ticket'], error=None)
+    return True
 
 
 def reconcile_publication(manifest, row, app):

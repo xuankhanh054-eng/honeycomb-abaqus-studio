@@ -155,3 +155,50 @@ def test_refill_preserves_controller_slot_even_before_its_job_is_visible(monkeyp
     app = SimpleNamespace(repository=lambda repo: object())
     campaign_controller.fill_owner_slots(None, app, {'designs': [], 'pilot_designs': []}, rows, 160, 'xuankhanh24')
     assert len(reserved) == expected
+
+
+@pytest.mark.parametrize('artifact_state', ['completed', 'partial', 'unavailable'])
+def test_finished_extraction_failure_is_not_automatically_recomputed(monkeypatch, artifact_state):
+    tool()
+    from types import SimpleNamespace
+
+    import campaign_controller
+
+    design = record(reference_model(), 'development', 1, 'xuankhanh24', [])
+    design.update(status='dispatching', ticket='a' * 32, dispatch_started_at=0)
+    work = dict(ticket='a' * 32, source_sha='original', workflow_run_id=123,
+                status='finished', outcome='solver_failed', design=design,
+                error='Workflow stopped before a verified execution receipt; inspect Actions diagnostics')
+    updates = []
+
+    class Catalog:
+        def __init__(self, github):
+            pass
+
+        def get(self, key):
+            return work, None
+
+        def update(self, key, transform):
+            updates.append(transform(work))
+
+    monkeypatch.setattr(campaign_controller, 'Catalog', Catalog)
+    def inspect(*args):
+        if artifact_state == 'unavailable':
+            raise ValueError('Artifact must be inspected')
+        return {'solver_success': True} if artifact_state == 'completed' else None
+
+    monkeypatch.setattr(campaign_controller, 'completed_odb_evidence', inspect, raising=False)
+    monkeypatch.setattr(campaign_controller, 'controller_source_sha', lambda: 'recovery-tools', raising=False)
+    github = SimpleNamespace(repo=lambda *a: {'status': 'completed'})
+    app = SimpleNamespace(repository=lambda repo: github)
+    manifest = dict(id='core-damage-v2-20261107', designs=[design], pilot_designs=[])
+    campaign_controller.reconcile_owner(None, manifest, app, 'xuankhanh24')
+    if artifact_state != 'completed':
+        assert design['status'] == ('solver_retry' if artifact_state == 'partial' else 'needs_investigation')
+        assert not updates
+        return
+    assert design['status'] == 'publication_pending'
+    assert design['publication_ticket'] == 'a' * 32
+    assert design.get('attempt', 0) == 0
+    assert updates[-1]['publication_kind'] == 'postprocess'
+    assert updates[-1]['postprocess_source_sha'] == 'recovery-tools'
