@@ -44,3 +44,18 @@ claim scientific acceptance. Experimental fracture calibration remains absent.
   `C:/UET/DO_AN/output/core-damage-v2-20261107/response-window-collection-*.json`.
 
 These software test counts are not FE sample counts.
+
+## Transient dispatch interruption during deployment
+
+The first refill encountered an actual GitHub HTTP 500 on a worker dispatch for
+`dzdeptrai390`. The central reservation and repository ticket were already durable.
+Other owners completed their refill, but propagation of that exception prevented
+the controller from publishing its final status and continuing to its relay step.
+
+Refill now retains uncertain reservations, records a compact warning in quota
+observations, and continues its bounded owner slots. An uncertain redispatch also
+keeps the same ticket and permits reconciliation to continue. Permanent errors
+still surface. There is no immediate blind POST retry or new solver ticket. The
+existing CAS claim and workflow lookup continue to prevent duplicate solvers.
+The regression first reproduced 5 failures for HTTP 500/502/503/504 and a transport
+timeout. Targeted campaign tests and Ruff/ty passed after the fix.

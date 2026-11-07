@@ -148,6 +148,7 @@ def reconcile_owner(store, manifest, app, owner, publication_reservations=None):
         elif work.get('workflow_run_id'):
             row['workflow_run_id'] = work['workflow_run_id']
             row['phase'] = work.get('phase', 'preparing')
+            row.pop('dispatch_warning', None)
             if work.get('status') == 'claimed' and not work.get('error'):
                 row['error'] = None
             run = github.repo('GET', '/actions/runs/' + str(work['workflow_run_id']))
@@ -163,9 +164,14 @@ def reconcile_owner(store, manifest, app, owner, publication_reservations=None):
                 row['workflow_run_id'] = match[0]['id']
             else:
                 # Re-dispatch the SAME ticket. The CAS claim rejects duplicate workers even after uncertain responses.
-                github.repo('POST', '/actions/workflows/core-damage-worker.yml/dispatches',
-                    {'ref': 'main', 'inputs': {'campaign_id': manifest['id'], 'ticket': row['ticket'],
-                                               'source_sha': work['source_sha']}})
+                try:
+                    github.repo('POST', '/actions/workflows/core-damage-worker.yml/dispatches',
+                        {'ref': 'main', 'inputs': {'campaign_id': manifest['id'], 'ticket': row['ticket'],
+                                                   'source_sha': work['source_sha']}})
+                except httpx.HTTPError as exc:
+                    if not transient_dispatch_error(exc):
+                        raise
+                    row['dispatch_warning'] = 'Dispatch acknowledgement unavailable; retain and reconcile this exact ticket'
                 row['dispatch_started_at'] = time.time()
     return manifest
 
@@ -303,6 +309,11 @@ def reconcile_analysis(manifest, app):
         dispatch_analysis(app, manifest)
 
 
+def transient_dispatch_error(exc):
+    return (isinstance(exc, httpx.TransportError) or
+            isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500)
+
+
 def fill_owner_slots(store, app, manifest, rows, capacity, owner, publication_reserved=0):
     github = app.repository(owner + '/honeycomb-abaqus-studio')
     index = OWNERS.index(owner)
@@ -325,10 +336,22 @@ def fill_owner_slots(store, app, manifest, rows, capacity, owner, publication_re
                and r['status'] in ('pending', 'checkpoint', 'solver_retry', 'preparation_retry')
                and admission(manifest, r)]
     dispatcher = Dispatcher(store, app)
+    dispatch_warnings = []
     for row in pending[:slots]:
-        dispatcher.reserve(manifest, row)
+        try:
+            dispatcher.reserve(manifest, row)
+        except httpx.HTTPError as exc:
+            if not transient_dispatch_error(exc):
+                raise
+            # The CAS reservation may already have committed and the POST may
+            # have been accepted. Reconcile the same ticket on the next tick;
+            # do not release its slot or invent a replacement solver here.
+            dispatch_warnings.append({'design_id': row['id'], 'error_class': type(exc).__name__,
+                                      'http_status': exc.response.status_code
+                                      if isinstance(exc, httpx.HTTPStatusError) else None,
+                                      'action': 'Retain durable reservation and reconcile before retry'})
     return owner, {'scope': 'selected repository and visible public repositories; GitHub enforces shared owner quota',
-                   'warnings': warnings}
+                   'warnings': warnings, 'dispatch_warnings': dispatch_warnings}
 
 
 def tick(store, app, identity):
