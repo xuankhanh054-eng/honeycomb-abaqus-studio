@@ -250,6 +250,8 @@ def reconcile_publication(manifest, row, app, *, admit_dispatch=None):
 def status_report(manifest):
     report = progress(manifest)
     report.update(phase=manifest['phase'], enabled=manifest['enabled'], errors=[], owners={})
+    report.update(protocol_error=manifest.get('error'), scientific_block=manifest.get('scientific_block'),
+                  collection_report=manifest.get('collection_report'))
     initial = [r for r in manifest['designs'] if r['role'] in ('development', 'test')]
     report.update(initial_400_dispatched=sum(r['status'] != 'pending' for r in initial),
                   initial_400_completed=sum(r['status'] == 'completed' and r.get('archive_verified', False)
@@ -383,7 +385,8 @@ def relay(store, app, identity, workflow_run_id):
     """Keep the active campaign moving when GitHub's scheduled event is delayed."""
     metadata, _ = store.catalog.get(campaign_key(identity) + '/meta')
     active_phases = {'material', 'pilot', 'time', 'mesh', 'mesh_time', 'sensitivity',
-                     'development_time_audit', 'production', 'adaptive', 'confirmation', 'analysis_pending'}
+                     'development_time_audit', 'production', 'adaptive', 'confirmation', 'analysis_pending',
+                     'provisional_collection'}
     if not metadata or not metadata.get('enabled') or metadata.get('phase') not in active_phases:
         return {'controller_redispatched': False}
     github = app.repository(CANONICAL)

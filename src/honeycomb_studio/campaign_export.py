@@ -7,6 +7,8 @@ from .models import ModelSpec
 
 
 def globally_qualified(manifest):
+    if manifest.get('scientific_block') or manifest.get('phase') in ('provisional_collection', 'collection_completed'):
+        return False
     return manifest.get('frozen') is True and all(
         manifest.get('gates', {}).get(k, {}).get('passed') is True for k in
         ('material', 'restart', 'time', 'mesh', 'damage_sensitivity', 'archive_restore', 'development_time_audit'))

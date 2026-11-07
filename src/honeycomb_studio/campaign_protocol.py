@@ -15,7 +15,40 @@ from .campaign import (
     reference_model,
     response_converged,
 )
-from .models import ModelSpec
+from .models import ModelSpec, digest
+
+PILOT_RESPONSE_ERROR = '8 m/s pilot did not meet the agreed response window'
+
+
+def initial_designs(manifest):
+    return [r for r in manifest['designs'] if r['role'] in ('development', 'test')]
+
+
+def response_failure_collection_authorized(manifest):
+    """A recorded decision permits raw collection of this exact initial plan only."""
+    provisional = manifest.get('provisional_collection', {})
+    decision = provisional.get('after_pilot_response_failure', {})
+    rows = initial_designs(manifest)
+    pilots = manifest['pilot_designs']
+    return (manifest.get('execution_scope') == 'full' and provisional.get('enabled') is True
+            and decision.get('enabled') is True and decision.get('failed_gate') == 'pilot_response_window'
+            and manifest.get('mesh_policy', {}).get('mode') == 'reuse_actions_reference'
+            and len(rows) == len({r['id'] for r in rows}) == 400
+            and decision.get('initial_designs_hash') == digest({r['id']: r['physics_hash'] for r in rows})
+            and len(pilots) == 3 and passed(pilots)
+            and all(r.get('quality', {}).get('passed') is True and r.get('archive') for r in pilots)
+            and all(r['model']['velocity_m_s'] == 8. and r['model']['duration'] == .008 for r in pilots)
+            and choose_velocity(summaries(pilots)) is None)
+
+
+def record_pilot_response_failure(manifest):
+    manifest['scientific_block'] = {
+        'gate': 'pilot_response_window', 'passed': False, 'error': PILOT_RESPONSE_ERROR,
+        'pilot_responses': [{'id': r['id'], 'physics_hash': r['physics_hash'],
+                             'workflow_run_id': r.get('workflow_run_id'),
+                             'response': {k: r['summary'].get(k) for k in
+                                          ('max_rear_downward_mm', 'rear_skin_deleted', 'event_finished')}}
+                            for r in manifest['pilot_designs']]}
 
 
 def qualification_designs(velocity, duration, *, mesh_factor=1., failure_displacement=.1, label="time"):
@@ -93,6 +126,11 @@ def advance(original):
     manifest = deepcopy(original)
     phase = manifest.get('phase', 'material')
     gates = manifest.setdefault('gates', {})
+    if (phase == 'needs_investigation' and manifest.get('error') == PILOT_RESPONSE_ERROR
+            and response_failure_collection_authorized(manifest)):
+        record_pilot_response_failure(manifest)
+        manifest.update(phase='provisional_collection', error=None)
+        phase = manifest['phase']
     blocked = [r['id'] for r in runnable(manifest) if r['status'] in
                ('quarantined', 'budget_exhausted', 'needs_investigation')]
     if blocked:
@@ -116,7 +154,12 @@ def advance(original):
                                           'design_ids': [r['id'] for r in rows]})
             return manifest
         if velocity is None:
-            manifest.update(phase='needs_investigation', error='8 m/s pilot did not meet the agreed response window')
+            record_pilot_response_failure(manifest)
+            if response_failure_collection_authorized(manifest):
+                manifest.update(phase='provisional_collection', error=None)
+                return advance(manifest)
+            else:
+                manifest.update(phase='needs_investigation', error=PILOT_RESPONSE_ERROR)
         else:
             durations = {r['model']['duration'] for r in rows if r['model']['velocity_m_s'] == velocity}
             if len(durations) != 1:
@@ -128,6 +171,18 @@ def advance(original):
                 return manifest
             manifest.update(selected_velocity_m_s=velocity, trial_duration_s=duration, phase='time')
             extend_unique(manifest, qualification_designs(velocity, duration + .004))
+    elif phase == 'provisional_collection':
+        if not response_failure_collection_authorized(manifest):
+            manifest.update(phase='needs_investigation', error='Fixed-plan provisional collection authorization no longer matches')
+            return manifest
+        rows = initial_designs(manifest)
+        if passed(rows) and all(r.get('quality', {}).get('passed') is True and r.get('archive')
+                                and not r.get('reused_from') for r in rows):
+            manifest.update(phase='collection_completed', enabled=False,
+                            collection_report={'completed_verified': len(rows),
+                                               'initial_designs_hash': digest({r['id']: r['physics_hash'] for r in rows}),
+                                               'global_qualification_passed': False,
+                                               'scientific_block': deepcopy(manifest['scientific_block'])})
     elif phase == 'time':
         velocity, duration = manifest['selected_velocity_m_s'], manifest['trial_duration_s']
         short = [r for r in manifest['pilot_designs'] + manifest['designs']
@@ -232,6 +287,8 @@ def runnable(manifest):
         return [r for r in manifest['designs'] if r['id'] in manifest['audit_ids'] or r.get('purpose') == 'audit_extension']
     if phase == 'production':
         return [r for r in manifest['designs'] if r['role'] in ('development', 'test')]
+    if phase == 'provisional_collection' and response_failure_collection_authorized(manifest):
+        return initial_designs(manifest)
     if phase in ('adaptive', 'confirmation'):
         return [r for r in manifest['designs'] if r['role'] == phase]
     return []

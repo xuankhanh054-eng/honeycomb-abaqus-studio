@@ -11,6 +11,7 @@ from copy import deepcopy
 import httpx
 
 from .campaign import BOUNDS, OWNERS, reference_model
+from .campaign_protocol import response_failure_collection_authorized
 from .cloud_github import Catalog, Github
 from .models import ModelSpec, digest
 
@@ -96,6 +97,13 @@ def claim(old, *, ticket, workflow, source_sha, repository):
 def admission(manifest, design):
     if not manifest.get("enabled") or not manifest.get("source_sha") or not manifest.get("runtime_hash"):
         return False
+    if manifest.get('phase') in ('provisional_collection', 'collection_completed'):
+        if (manifest['phase'] == 'collection_completed'
+                or not response_failure_collection_authorized(manifest)
+                or design['role'] not in ('development', 'test')
+                or not any(r['id'] == design['id'] and r['physics_hash'] == design['physics_hash']
+                           for r in manifest['designs'] if r['role'] in ('development', 'test'))):
+            return False
     if manifest.get('execution_scope') == 'pilot' and design['role'] != 'pilot':
         return False
     infrastructure = manifest.get("infrastructure", {}).get(design["owner"], {})
@@ -109,6 +117,8 @@ def admission(manifest, design):
     if design["role"] in ("qualification", "material"):
         return (manifest.get('gates', {}).get('material', {}).get('passed') is True
                 and manifest.get('gates', {}).get('restart', {}).get('passed') is True)
+    if manifest.get('phase') == 'provisional_collection':
+        return parallel_collection_admission(manifest, design)
     if parallel_collection_admission(manifest, design):
         return True
     if not manifest.get("frozen"):
@@ -125,9 +135,13 @@ def admission(manifest, design):
 def parallel_collection_admission(manifest, design):
     """Collect fixed-input FE bytes provisionally; global scientific acceptance stays closed."""
     if (manifest.get('provisional_collection', {}).get('enabled') is not True
-            or manifest.get('phase') not in ('pilot', 'time', 'sensitivity', 'development_time_audit')
+            or manifest.get('phase') not in ('pilot', 'time', 'sensitivity', 'development_time_audit',
+                                             'provisional_collection')
             or design['role'] not in ('development', 'test')
             or manifest.get('mesh_policy', {}).get('mode') != 'reuse_actions_reference'):
+        return False
+    if (manifest.get('phase') == 'provisional_collection'
+            and not response_failure_collection_authorized(manifest)):
         return False
     gates = manifest.get('gates', {})
     if not all(gates.get(k, {}).get('passed') is True
