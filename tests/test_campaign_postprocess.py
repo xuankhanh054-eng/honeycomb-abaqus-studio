@@ -47,6 +47,30 @@ def test_completed_solver_without_restart_ack_can_resume_only_postprocessing(tmp
     assert batch['pause_requested'] is False
 
 
+def test_completed_recovery_verifies_current_sta_without_replacing_original_solver(tmp_path, monkeypatch):
+    from honeycomb_studio import solver
+
+    module = tool()
+    store, design, run, _ = fixture(tmp_path)
+    raw = Path(run['attempts'][0]['path']) / 'raw'
+    original = (raw / 'hc.sta').read_text()
+    (raw / 'hc.sta').write_text(' THE ANALYSIS HAS NOT BEEN COMPLETED\n'
+                               'Abaqus/Explicit 2020 DATE 06-Nov-2026 TIME 23:48:19\n' + original)
+    # Existing continuation sources retain their original parser and Engine.
+    def legacy(*args):
+        return {'solver_success': False, 'solver_error': True}
+    monkeypatch.setattr(solver, 'sta_progress', legacy)
+    prepared, batch, evidence = module.prepare_completed_run(store, {'design': design})
+    assert evidence['solver_success']
+    assert solver.sta_progress is legacy
+    engine = module.PostprocessOnlyEngine(store, abaqus='must-not-launch-fe', fake=False)
+    exports = []
+    monkeypatch.setattr(engine, '_postprocess', lambda r, attempt, b: exports.append(attempt['path']))
+    engine._execute(prepared, batch)
+    assert exports == [run['attempts'][0]['path']]
+    assert len(store.get('runs', run['id'])['attempts']) == 1
+
+
 @pytest.mark.parametrize('problem', ['short_analysis', 'different_input', 'missing_odb'])
 def test_postprocess_rejects_partial_or_different_solver_bytes(tmp_path, problem):
     module = tool()

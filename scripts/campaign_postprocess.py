@@ -1,5 +1,6 @@
 """Resume an immutable, completed ODB without ever admitting a new FE process."""
 import argparse
+import importlib.util
 import json
 import os
 import shutil
@@ -19,7 +20,6 @@ from campaign_worker import ROOT, publish_execution, source_sha
 from cloud_worker import require_qualification
 from native_cloud_worker import native_runtime
 
-from honeycomb_studio import solver
 from honeycomb_studio.actions_log import get_actions_log
 from honeycomb_studio.campaign import numerical_gate, one_run_spec
 from honeycomb_studio.campaign_queue import ticket_key
@@ -29,6 +29,16 @@ from honeycomb_studio.engine import Engine
 from honeycomb_studio.estimates import mesh_work, predict
 from honeycomb_studio.models import BatchSpec, digest, expand
 from honeycomb_studio.store import Store, write_json
+
+# Read status with the verified recovery tool while leaving the original
+# solver module, Engine and native extractor imported from the frozen source.
+_status_spec = importlib.util.spec_from_file_location(
+    '_campaign_recovery_solver_status',
+    Path(__file__).resolve().parents[1] / 'src/honeycomb_studio/solver.py')
+if _status_spec is None or _status_spec.loader is None:
+    raise ImportError('Verified recovery status reader is unavailable')
+_status_reader = importlib.util.module_from_spec(_status_spec)
+_status_spec.loader.exec_module(_status_reader)
 
 
 class PostprocessOnlyEngine(Engine):
@@ -93,7 +103,7 @@ def prepare_completed_run(store, work):
     raw = directory / 'raw'
     odb = raw / (attempt['job_name'] + '.odb')
     odb.resolve().relative_to(raw.resolve())
-    sta = solver.sta_progress(raw / (attempt['job_name'] + '.sta'), run['resolved']['duration'])
+    sta = _status_reader.sta_progress(raw / (attempt['job_name'] + '.sta'), run['resolved']['duration'])
     if not sta.get('solver_success') or odb.is_symlink() or not odb.is_file() or not odb.stat().st_size:
         raise ValueError('No complete original native ODB; FE restart is forbidden in this workflow')
     # The independent STA success and final physical time are required even

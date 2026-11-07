@@ -124,13 +124,22 @@ def sta_progress(path: Path, duration: float) -> dict:
         size = f.seek(0, 2)
         f.seek(max(0, size - 65536))
         text = f.read().decode("ascii", errors="replace")
-    result = {
-        "solver_success": "THE ANALYSIS HAS COMPLETED SUCCESSFULLY" in text,
-        "solver_error": "THE ANALYSIS HAS NOT BEEN COMPLETED" in text,
-    }
+    # Explicit recovery appends a new invocation to the same STA, retaining
+    # the predecessor's NOT COMPLETED banner. Scope status and progress to
+    # the latest native invocation, including while it is still starting.
+    headers = list(re.finditer(r"(?m)^[ \t]*Abaqus/Explicit[^\r\n]*\bDATE\b[^\r\n]*\bTIME\b", text))
+    if headers:
+        text = text[headers[-1].start():]
+    success = text.rfind("THE ANALYSIS HAS COMPLETED SUCCESSFULLY")
+    failure = text.rfind("THE ANALYSIS HAS NOT BEEN COMPLETED")
+    result = {"solver_success": success >= 0 and success > failure,
+              "solver_error": failure >= 0 and failure > success}
     for line in reversed(text.splitlines()):
         m = ROW.match(line)
         if m:
+            # A previous success cannot certify rows appended afterwards.
+            if text.rfind(line) > success:
+                result['solver_success'] = False
             increment, step, total, cpu, stable, critical, ke, energy = m.groups()
             result.update(
                 increment=int(increment),
