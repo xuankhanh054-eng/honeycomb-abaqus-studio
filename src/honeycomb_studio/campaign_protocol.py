@@ -24,6 +24,20 @@ def initial_designs(manifest):
     return [r for r in manifest['designs'] if r['role'] in ('development', 'test')]
 
 
+def fixed_collection_authorized(manifest):
+    """The human's new6.5m/s contract belongs to a separate immutable campaign."""
+    contract = manifest.get('fixed_collection_contract', {})
+    rows = initial_designs(manifest)
+    return (manifest.get('id', '').endswith('-v6p5')
+            and contract.get('human_authorized') is True
+            and contract.get('velocity_m_s') == 6.5 and contract.get('duration_s') == .008
+            and manifest.get('execution_scope') == 'full'
+            and manifest.get('provisional_collection', {}).get('enabled') is True
+            and manifest.get('mesh_policy', {}).get('mode') == 'reuse_actions_reference'
+            and len(rows) == len({r['id'] for r in rows}) == 400
+            and contract.get('initial_designs_hash') == digest({r['id']: r['physics_hash'] for r in rows}))
+
+
 def response_failure_collection_authorized(manifest):
     """A recorded decision permits raw collection of this exact initial plan only."""
     provisional = manifest.get('provisional_collection', {})
@@ -171,8 +185,10 @@ def advance(original):
                 return manifest
             manifest.update(selected_velocity_m_s=velocity, trial_duration_s=duration, phase='time')
             extend_unique(manifest, qualification_designs(velocity, duration + .004))
-    elif phase == 'provisional_collection':
-        if not response_failure_collection_authorized(manifest):
+    elif phase in ('provisional_collection', 'fixed_collection'):
+        authorized = (fixed_collection_authorized(manifest) if phase == 'fixed_collection'
+                      else response_failure_collection_authorized(manifest))
+        if not authorized:
             manifest.update(phase='needs_investigation', error='Fixed-plan provisional collection authorization no longer matches')
             return manifest
         rows = initial_designs(manifest)
@@ -182,7 +198,8 @@ def advance(original):
                             collection_report={'completed_verified': len(rows),
                                                'initial_designs_hash': digest({r['id']: r['physics_hash'] for r in rows}),
                                                'global_qualification_passed': False,
-                                               'scientific_block': deepcopy(manifest['scientific_block'])})
+                                               'scientific_block': deepcopy(manifest.get('scientific_block')),
+                                               'scientific_acceptance': 'not_established'})
     elif phase == 'time':
         velocity, duration = manifest['selected_velocity_m_s'], manifest['trial_duration_s']
         short = [r for r in manifest['pilot_designs'] + manifest['designs']
@@ -288,6 +305,8 @@ def runnable(manifest):
     if phase == 'production':
         return [r for r in manifest['designs'] if r['role'] in ('development', 'test')]
     if phase == 'provisional_collection' and response_failure_collection_authorized(manifest):
+        return initial_designs(manifest)
+    if phase == 'fixed_collection' and fixed_collection_authorized(manifest):
         return initial_designs(manifest)
     if phase in ('adaptive', 'confirmation'):
         return [r for r in manifest['designs'] if r['role'] == phase]

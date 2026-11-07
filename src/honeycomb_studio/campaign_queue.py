@@ -11,11 +11,11 @@ from copy import deepcopy
 import httpx
 
 from .campaign import BOUNDS, OWNERS, reference_model
-from .campaign_protocol import response_failure_collection_authorized
+from .campaign_protocol import fixed_collection_authorized, response_failure_collection_authorized
 from .cloud_github import Catalog, Github
 from .models import ModelSpec, digest
 
-CAMPAIGN = re.compile(r"^core-damage-v2-[0-9]{8}$")
+CAMPAIGN = re.compile(r"^core-damage-v2-[0-9]{8}(?:-v6p5)?$")
 ACTIVE = {"queued", "in_progress", "waiting", "pending", "requested"}
 TERMINAL = {"completed", "quarantined", "budget_exhausted"}
 
@@ -97,9 +97,11 @@ def claim(old, *, ticket, workflow, source_sha, repository):
 def admission(manifest, design):
     if not manifest.get("enabled") or not manifest.get("source_sha") or not manifest.get("runtime_hash"):
         return False
-    if manifest.get('phase') in ('provisional_collection', 'collection_completed'):
+    if manifest.get('phase') in ('provisional_collection', 'fixed_collection', 'collection_completed'):
+        authorized = (fixed_collection_authorized(manifest) if manifest['phase'] == 'fixed_collection'
+                      else response_failure_collection_authorized(manifest))
         if (manifest['phase'] == 'collection_completed'
-                or not response_failure_collection_authorized(manifest)
+                or not authorized
                 or design['role'] not in ('development', 'test')
                 or not any(r['id'] == design['id'] and r['physics_hash'] == design['physics_hash']
                            for r in manifest['designs'] if r['role'] in ('development', 'test'))):
@@ -117,7 +119,7 @@ def admission(manifest, design):
     if design["role"] in ("qualification", "material"):
         return (manifest.get('gates', {}).get('material', {}).get('passed') is True
                 and manifest.get('gates', {}).get('restart', {}).get('passed') is True)
-    if manifest.get('phase') == 'provisional_collection':
+    if manifest.get('phase') in ('provisional_collection', 'fixed_collection'):
         return parallel_collection_admission(manifest, design)
     if parallel_collection_admission(manifest, design):
         return True
@@ -136,12 +138,14 @@ def parallel_collection_admission(manifest, design):
     """Collect fixed-input FE bytes provisionally; global scientific acceptance stays closed."""
     if (manifest.get('provisional_collection', {}).get('enabled') is not True
             or manifest.get('phase') not in ('pilot', 'time', 'sensitivity', 'development_time_audit',
-                                             'provisional_collection')
+                                             'provisional_collection', 'fixed_collection')
             or design['role'] not in ('development', 'test')
             or manifest.get('mesh_policy', {}).get('mode') != 'reuse_actions_reference'):
         return False
     if (manifest.get('phase') == 'provisional_collection'
             and not response_failure_collection_authorized(manifest)):
+        return False
+    if manifest.get('phase') == 'fixed_collection' and not fixed_collection_authorized(manifest):
         return False
     gates = manifest.get('gates', {})
     if not all(gates.get(k, {}).get('passed') is True
@@ -156,12 +160,14 @@ def parallel_collection_admission(manifest, design):
                      'skin_patch_half', 'shell_element', 'shell_points'}
     if not required_mesh <= parameters.keys():
         return False
-    fixed = {'velocity_m_s': 8., 'duration': .008, 'mass_kg': 2.65, 'core_height': 20., 'cpus': 4}
+    velocity = 6.5 if manifest.get('phase') == 'fixed_collection' else 8.
+    fixed = {'velocity_m_s': velocity, 'duration': .008, 'mass_kg': 2.65, 'core_height': 20., 'cpus': 4}
     fixed.update(parameters)
     if not all(model.get(k) == value for k, value in fixed.items()):
         return False
     try:
-        expected = ModelSpec.model_validate(reference_model(**{key: model[key] for key in BOUNDS}).model_dump())
+        expected = ModelSpec.model_validate(reference_model(**{key: model[key] for key in BOUNDS},
+                                                           velocity_m_s=velocity).model_dump())
     except (ValueError, KeyError, TypeError):
         return False
     return digest(model) == digest(expected.model_dump()) and design['physics_hash'] == digest(expected.resolved())
@@ -185,13 +191,23 @@ def execution_source(manifest, design):
     """Keep native continuations immutable; apply only a qualified repair to new executions."""
     if design.get('segment', 0):
         return design['predecessor']['source_sha']
+    source = manifest['source_sha']
     patch = manifest.get('qualified_worker_patch', {})
     if (patch.get('passed') is True and patch.get('base_source_sha') == manifest.get('source_sha')
             and patch.get('runtime_hash') == manifest.get('runtime_hash')
             and re.fullmatch(r'[a-f0-9]{40}', patch.get('source_sha', ''))
             and patch.get('native_components_unchanged_verified') is True):
-        return patch['source_sha']
-    return manifest['source_sha']
+        source = patch['source_sha']
+    upgrade = manifest.get('worker_metadata_upgrade', {})
+    components = upgrade.get('unchanged_components', {})
+    if (upgrade.get('passed') is True and upgrade.get('base_source_sha') == source
+            and upgrade.get('runtime_hash') == manifest.get('runtime_hash')
+            and re.fullmatch(r'[a-f0-9]{40}', upgrade.get('source_sha', ''))
+            and upgrade.get('native_components_unchanged_verified') is True
+            and len(components) >= 10
+            and all(re.fullmatch(r'[a-f0-9]{64}', value) for value in components.values())):
+        return upgrade['source_sha']
+    return source
 
 
 def ramp_capacity(manifest):

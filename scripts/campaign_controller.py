@@ -409,7 +409,7 @@ def relay(store, app, identity, workflow_run_id):
     metadata, _ = store.catalog.get(campaign_key(identity) + '/meta')
     active_phases = {'material', 'pilot', 'time', 'mesh', 'mesh_time', 'sensitivity',
                      'development_time_audit', 'production', 'adaptive', 'confirmation', 'analysis_pending',
-                     'provisional_collection'}
+                     'provisional_collection', 'fixed_collection'}
     if not metadata or not metadata.get('enabled') or metadata.get('phase') not in active_phases:
         return {'controller_redispatched': False}
     github = app.repository(CANONICAL)

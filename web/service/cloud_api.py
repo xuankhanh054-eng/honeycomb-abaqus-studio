@@ -127,7 +127,7 @@ def create_app(github: Github | None = None) -> FastAPI:
 
     @app.get('/api/campaigns/{identity}')
     def campaign_status(identity: str):
-        if not re.fullmatch(r'core-damage-v2-[0-9]{8}', identity):
+        if not re.fullmatch(r'core-damage-v2-[0-9]{8}(?:-v6p5)?', identity):
             raise HTTPException(404, 'Không tìm thấy chiến dịch.')
         report, _ = catalog.get('campaigns/' + identity + '/status')
         if report is None:

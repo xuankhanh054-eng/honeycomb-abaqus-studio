@@ -1,0 +1,26 @@
+name: Core damage physics identity audit
+on:
+  workflow_dispatch:
+    inputs:
+      campaign_id:
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: physics-identity-${{ inputs.campaign_id }}
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      CAMPAIGN_ID: ${{ inputs.campaign_id }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.3.0
+      - run: uv sync --locked --extra cloud --extra campaign
+      - run: uv run --locked --extra cloud --extra campaign python scripts/audit_campaign_physics_identity.py
