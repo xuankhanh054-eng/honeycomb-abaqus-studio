@@ -112,7 +112,7 @@ jobs:
           rm -- "$media"
           df -B1 / /mnt
       - name: Solve or restore the exact predecessor state
-        run: uv run --locked --extra cloud python scripts/campaign_worker.py run --campaign-id "$CAMPAIGN_ID" --ticket "$TICKET"
+        run: uv run --locked --extra cloud python runtime-tools/scripts/campaign_checkpoint_transport.py run --campaign-id "$CAMPAIGN_ID" --ticket "$TICKET"
       - uses: actions/upload-artifact@v7.0.2
         if: failure() || cancelled()
         with:
