@@ -101,6 +101,7 @@ jobs:
           tailscale_id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           audience: ${{ secrets.TS_AUDIENCE }}
           drive_credentials: ${{ secrets.HONEYCOMB_DRIVE_CREDENTIALS_JSON }}
+          media_release_key: ${{ secrets.ABAQUS_MEDIA_RELEASE_KEY }}
       - name: Release verified installation media before resource admission
         shell: bash
         run: |
