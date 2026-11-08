@@ -89,8 +89,15 @@ jobs:
           if available < required:
               raise SystemExit('Preparation blocked: insufficient disk even before runtime installation')
           PY
-      - uses: ./.github/actions/abaqus-runtime
+      - name: Load independently pinned installation transport
+        uses: actions/checkout@v7.0.1
         with:
+          ref: ${{ vars.CORE_DAMAGE_TRANSPORT_SOURCE_SHA }}
+          path: runtime-tools
+          persist-credentials: false
+      - uses: ./runtime-tools/.github/actions/abaqus-runtime
+        with:
+          transport_script: runtime-tools/scripts/prepare_linux_media.py
           tailscale_id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           audience: ${{ secrets.TS_AUDIENCE }}
           drive_credentials: ${{ secrets.HONEYCOMB_DRIVE_CREDENTIALS_JSON }}
