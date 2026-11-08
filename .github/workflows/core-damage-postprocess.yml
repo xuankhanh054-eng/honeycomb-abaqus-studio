@@ -87,6 +87,7 @@ jobs:
           audience: ${{ secrets.TS_AUDIENCE }}
           drive_credentials: ${{ secrets.HONEYCOMB_DRIVE_CREDENTIALS_JSON }}
           media_release_key: ${{ secrets.ABAQUS_MEDIA_RELEASE_KEY }}
+          media_release_tag: ${{ vars.ABAQUS_MEDIA_RELEASE_TAG }}
       - name: Release verified installation media before reading ODB
         shell: bash
         run: |
