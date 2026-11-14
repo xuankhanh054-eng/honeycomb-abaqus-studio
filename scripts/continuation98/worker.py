@@ -149,15 +149,18 @@ def run_solver(executable, raw, arguments, job, target, root, deadline, update):
         requested = False
         last_update = 0
         while process.poll() is None:
-            if time.time() - last_update > 60:
-                update(
-                    {
-                        "phase": "solving",
-                        "current_job": job,
-                        "target_s": target,
-                        "progress": total_progress(raw, job),
-                    }
-                )
+            if time.time() - last_update > 600:
+                try:
+                    update(
+                        {
+                            "phase": "solving",
+                            "current_job": job,
+                            "target_s": target,
+                            "progress": total_progress(raw, job),
+                        }
+                    )
+                except (httpx.HTTPError, RuntimeError) as error:
+                    save(root / "progress-publication-warning.json", {"type": type(error).__name__})
                 last_update = time.time()
             if time.time() > deadline and not requested:
                 (raw / "continuation.stop").write_text("Orderly checkpoint; preserve native history\n")
