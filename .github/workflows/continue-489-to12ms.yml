@@ -1,0 +1,100 @@
+name: Continue original impact state to 12 ms
+run-name: Continue 8 to 12 ms · ${{ inputs.design_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      design_id:
+        required: true
+        type: string
+permissions:
+  contents: write
+  actions: read
+  id-token: write
+concurrency:
+  group: continuation-12ms-${{ inputs.design_id }}
+  cancel-in-progress: false
+jobs:
+  restart:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 330
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      TASK_CODE_SHA: ${{ github.sha }}
+      ABAQUS_MEDIA_DRIVE_FILE_ID: ${{ vars.ABAQUS_MEDIA_DRIVE_FILE_ID }}
+      ABAQUS_LICENSE_ENDPOINT: ${{ secrets.ABAQUS_LICENSE_ENDPOINT }}
+      ABAQUS_VENDOR_PORT: ${{ secrets.ABAQUS_VENDOR_PORT }}
+      HONEYCOMB_INSTALL_CAA: '1'
+    steps:
+      - name: Start bounded runner clock
+        run: echo "HONEYCOMB_WORKFLOW_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7.0.1
+        with:
+          path: task-code
+          persist-credentials: false
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: xuankhanh24/honeycomb-abaqus-studio
+          ref: ec3455f01440026f313f3911688eda4a5c84d516
+          path: runtime
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: Install pinned runtime dependencies
+        working-directory: runtime
+        run: uv sync --locked --extra cloud
+      - uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:honeycomb-runner
+      - name: Verify private license connectivity
+        working-directory: runtime
+        run: uv run --locked --extra cloud python scripts/check_license_network.py
+      - name: Prepare isolated native runtime
+        working-directory: runtime
+        run: |
+          sudo rm -rf /usr/local/lib/android
+          sudo apt-get update -qq
+          sudo apt-get install -y unrar p7zip-full
+          docker build --build-arg MODEL_UID=$(id -u) -t honeycomb-install-probe scripts/linux_media
+      - name: Download verified installation media
+        working-directory: runtime
+        env:
+          HONEYCOMB_DRIVE_CREDENTIALS_JSON: ${{ secrets.HONEYCOMB_DRIVE_CREDENTIALS_JSON }}
+        run: uv run --locked python scripts/prepare_linux_media.py
+      - name: Install original Linux Abaqus 2020 runtime
+        working-directory: runtime
+        run: bash scripts/linux_media/install_runtime.sh
+      - name: Release installation-only disk space
+        working-directory: runtime
+        run: |
+          sudo umount "$RUNNER_TEMP/abaqus-mount"
+          rm -f "$RUNNER_TEMP/abaqus-media-inspection/iso/DS.SIMULIA.Suite.2020.Linux64_Softgozar.com.iso"
+      - name: Verify state and continue the same physical analysis
+        working-directory: runtime
+        env:
+          DESIGN_ID: ${{ inputs.design_id }}
+        run: uv run --locked --extra cloud python ../task-code/scripts/continuation98/worker.py --design-id "$DESIGN_ID" --root /tmp/continuation98
+      - name: Preserve compact execution receipts
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: continuation-receipts-${{ inputs.design_id }}-${{ github.run_id }}
+          retention-days: 30
+          if-no-files-found: ignore
+          path: |
+            /tmp/continuation98/*.json
+            /tmp/continuation98/*.csv
+            /tmp/continuation98/*.log
+      - name: Preserve native state after failure
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: continuation-native-${{ inputs.design_id }}-${{ github.run_id }}
+          compression-level: 0
+          retention-days: 30
+          include-hidden-files: true
+          if-no-files-found: ignore
+          path: |
+            /tmp/continuation98/raw/**
+            /tmp/continuation98/*.json
+            /tmp/continuation98/*.log
